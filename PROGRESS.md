@@ -71,24 +71,53 @@ IO-VNBD data replaces the synthetic drive.
 - Synthetic drive is straight-line only for now — turning/curved roads
   aren't needed until Phase 5's map matcher requires a real road graph.
 
-**Next (Day 2):** EDA pass + the naive double-integration drift baseline
-— integrate raw accelerometer directly to position with zero correction,
-and plot how fast it drifts. This number is what every later phase needs
-to beat, and gets logged as the first entry in `results/metrics.md`.
+Day 2 — EDA + Naive Double-Integration Drift Baseline
 
-**Files:**
-```
+Goal: Characterize the raw sensor data (distributions, noise floor, stationary periods) and establish the naive dead-reckoning baseline — the number every later phase (calibration, ZUPT, learned velocity model, strapdown INS, map matching, GNSS fusion) has to beat.
+
+What was built:
+
+src/eda.py — EDA pass over a loaded drive:
+channel_stats(): mean/std/min/max for all 6 raw IMU channels (accel_x/y/z, gyro_roll/pitch/yaw).
+stationary_mask(): flags samples as stationary using forward-filled GPS speed < 1 km/h — this is the same signal Phase 2's ZUPT classifier will need to detect zero-velocity windows.
+stationary_noise_floor(): IMU channel std restricted to stationary windows — the actual sensor noise floor, used later to set Kalman filter R/Q matrices (Phase 6).
+Two plots: raw IMU channel histograms, and accel_x/GPS-speed with detected stationary windows overlaid.
+src/dead_reckoning/naive_drift_baseline.py — the naive baseline itself:
+naive_double_integrate(): raw accel_x → cumulative-sum velocity → cumulative-sum position, with zero bias correction, ZUPT, or any other correction.
+evaluate_drift(): compares integrated position against ground truth (synthetic drives carry true distance in df.attrs; real IO-VNBD drives fall back to a GPS-speed-integrated reference track) and reports final position error, drift rate (m/min), and RMSE.
+log_metric(): appends the result as the first row of results/metrics.md, which every later phase will add a row to.
+
+Verified: Ran EDA and the drift baseline against the Day 1 synthetic drive (regenerated fresh from the same seed, 1200 samples / 119.9 s):
+
+Channel stats: accel_x mean ≈ 0.005 m/s² (near-zero, as expected for a straight cyclic drive), std ≈ 0.84 m/s² (dominated by the accel/brake cycles, not noise). accel_z mean ≈ 9.82 m/s² (≈ gravity, as expected), with a max of 14.5 m/s² from the injected pothole spikes. Gyro channels all near-zero mean with ~0.01 rad/s std, matching the injected bias/noise config.
+Stationary detection: 90 of 1200 samples (7.5%) flagged stationary across the 4 stop segments in the drive — matches the 3-cycle accelerate/cruise/brake/stop profile plus the drive's initial stopped state.
+Stationary noise floor: accel_y/z and all 3 gyro channels come out at ~0.01–0.03 std, consistent with the injected sensor noise. accel_x stationary std came out higher (~0.52) than the injected 0.05 — see "Issue found" below.
+Naive drift baseline: final position error 41.99 m over a 966.67 m true drive (21.01 m/min drift rate, 20.71 m RMSE), with error growing monotonically and non-linearly (visible acceleration in the error curve during each accel/brake cycle) — the textbook double-integration drift signature. Logged as the first row of results/metrics.md.
+
+Issue found (carries into Day 3): the stationary-window detector relies on 1 Hz GPS speed forward-filled to 10 Hz, which lags behind the true stop instant by up to ~1s — so the "stationary" accel_x std comes out inflated (it's partially catching the tail of the braking ramp, not true zero-velocity samples). Phase 2's real ZUPT classifier (Day 3-5) needs a tighter, IMU-native stationary detector (e.g. windowed gyro-magnitude + accel-variance threshold) rather than relying on sparse GPS speed alone.
+
+Decisions made:
+
+Naive baseline integrates accel_x only (forward axis) since the synthetic drive is straight-line-only; once Phase 5 introduces curved roads the baseline will need heading (yaw) integration too to project forward accel into a 2D track — noted for when the synthetic generator gains turns.
+results/metrics.md format locked in now (Phase/Day, Method, final error, drift rate, RMSE columns) — every phase from here appends one row, so the drift-reduction story is directly comparable end-to-end.
+
+Next (Day 3): Start Phase 2 — mount alignment (estimate and correct the phone's orientation relative to the vehicle) and constant-bias estimation per channel, using the stationary windows identified today (with the tighter IMU-native detector noted above). Re-run the Day 2 drift baseline after bias correction to log the first improvement in results/metrics.md.
+
+Files:
+
 idr-project/
 ├── requirements.txt
 ├── PROGRESS.md
 ├── SUMMARY.md
 ├── src/
 │   ├── io_vnbd_loader.py
+│   ├── eda.py
 │   ├── utils/
 │   │   └── synthetic_data.py
 │   ├── calibration/        (empty — Day 3)
 │   ├── models/              (empty — Day 6)
-│   ├── dead_reckoning/       (empty — Day 9)
+│   ├── dead_reckoning/
+│   │   └── naive_drift_baseline.py
 │   ├── map_matching/          (empty — Day 11)
 │   ├── fusion/                 (empty — Day 13)
 │   └── edge_engine/             (empty — Day 15)
@@ -98,6 +127,9 @@ idr-project/
 ├── mobile_app/               (empty — Day 15)
 ├── tests/                     (empty)
 └── results/
+    ├── metrics.md              (Day 2: naive baseline logged)
     └── plots/
-        └── day1_imu_sanity_check.png
-```
+        ├── day1_imu_sanity_check.png
+        ├── day2_eda_imu_distributions.png
+        ├── day2_eda_stationary_noise.png
+        └── day2_naive_drift_baseline.png
