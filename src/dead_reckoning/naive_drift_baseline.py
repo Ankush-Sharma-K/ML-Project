@@ -84,7 +84,7 @@ def evaluate_drift(df: pd.DataFrame, true_distance_m: np.ndarray | None = None) 
     }
 
 
-def plot_drift(eval_result: dict, out_path: str | Path) -> None:
+def plot_drift(eval_result: dict, out_path: str | Path, title: str = "Day 2 — Naive Double-Integration Drift Baseline (zero correction)") -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
 
     axes[0].plot(eval_result["t"], eval_result["position"], label="naive DR (integrated)", color="#c0392b")
@@ -103,7 +103,7 @@ def plot_drift(eval_result: dict, out_path: str | Path) -> None:
     axes[1].set_xlabel("time (s)")
     axes[1].set_ylabel("error (m)")
 
-    fig.suptitle("Day 2 — Naive Double-Integration Drift Baseline (zero correction)")
+    fig.suptitle(title)
     fig.tight_layout()
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=130)
