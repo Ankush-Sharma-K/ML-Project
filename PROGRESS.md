@@ -19,163 +19,120 @@ Trained/evaluated against the IO-VNBD dataset per the problem statement.
 | 6 — GNSS+INS Fusion | 13–14 | UKF/EKF fusion, adaptive noise, seamless GNSS↔DR handoff |
 | 7 — App & Deployment | 15 | Edge engine API, mobile app UI, packaging, final submission |
 
-**Status: Phase 2, Day 3 of 15 complete.**
+**Status: Phase 2, Day 4 of 15 — IN PROGRESS (part 1 of 2 complete).**
 
 ---
 
 ## Day 1 — Repo Scaffold + IO-VNBD Loader + Synthetic Data
 
-**Goal:** Stand up the project skeleton and a working data-loading path
-before touching any DSP/ML.
-
-**What was built:**
-- Full repo scaffold (`data/`, `src/{calibration,models,dead_reckoning,
-  map_matching,fusion,edge_engine,utils}`, `mobile_app/`, `tests/`,
-  `results/plots/`).
-- `src/io_vnbd_loader.py` — `load_smartphone_drive()` loads IO-VNBD
-  smartphone drives into a tidy DataFrame (24-column schema: 10 Hz IMU
-  accel/gravity/gyro/mag/orientation + GPS lat/lon/speed/accuracy/
-  satellites), plus `drive_summary()` for a post-load sanity check.
-- `src/utils/synthetic_data.py` — generates a physically-plausible fake
-  drive matching the same schema (no internet access in this sandbox to
-  fetch real IO-VNBD data).
-
-**Verified:** synthetic drive (1200 samples, 119.9 s) loads correctly,
-implied rate 10.0 Hz, GPS speed range matches the cruise target.
-
-**Decisions made:**
-- Schema confirmed against the published Data in Brief paper.
-- No internet / no `pip install torch, scikit-learn, filterpy` in this
-  sandbox — classical DSP/filter/Kalman code built and tested here on
-  synthetic data; deep-learning training (Phase 3) and real IO-VNBD runs
-  happen in the user's own environment.
-- Synthetic drive is straight-line only for now.
+Full repo scaffold; `src/io_vnbd_loader.py` (`load_smartphone_drive()`,
+`drive_summary()`); `src/utils/synthetic_data.py` (schema-matching
+synthetic drive generator, no internet in this sandbox). Verified:
+1200-sample synthetic drive loads correctly at the expected 10 Hz.
 
 ---
 
 ## Day 2 — EDA + Naive Double-Integration Drift Baseline
 
-**Goal:** Characterize raw sensor noise/distributions and establish the
-naive dead-reckoning baseline every later phase has to beat.
+`src/eda.py` (channel stats, GPS-based stationary detection, noise
+floor). `src/dead_reckoning/naive_drift_baseline.py` (naive
+accel→velocity→position integration, zero correction — the baseline
+every later phase must beat). Verified: 41.99 m final error / 21.01
+m/min drift on a bias-free synthetic drive, logged as the first
+`results/metrics.md` row.
 
-**What was built:**
-- `src/eda.py` — `channel_stats()`, `stationary_mask()` (GPS-speed
-  threshold), `stationary_noise_floor()`, plus distribution and
-  stationary-window plots.
-- `src/dead_reckoning/naive_drift_baseline.py` — `naive_double_integrate()`
-  (raw `accel_x_mps2` → cumsum → velocity → cumsum → position, zero
-  correction), `gps_reference_distance()` (ground truth), `evaluate_drift()`,
-  `plot_drift()`, `log_metric()` (appends to `results/metrics.md`).
-
-**Verified:** on a synthetic drive with no injected sensor bias, naive
-double integration gave 41.99 m final error / 21.01 m/min drift / 20.71 m
-RMSE over a 966.67 m drive — logged as the first row of `results/metrics.md`.
-
-**Issue found (carried into Day 3):** the GPS-speed-based stationary
-detector lags the true stop instant by up to ~1 s (1 Hz GPS, sparse),
-inflating the measured stationary noise floor — flagged as needing a
-tighter, IMU-native detector.
-
-**Decisions made:**
-- Naive baseline integrates `accel_x_mps2` only (forward axis); will
-  need heading integration once turns are introduced (Phase 5+).
-- `results/metrics.md` format locked: Phase/Day, Method, final error,
-  drift rate, RMSE — every phase appends one row.
+**Issue found:** GPS-speed-based stationary detection lags the true
+stop instant — carried into Day 3.
 
 ---
 
 ## Day 3 — Gravity Compensation + IMU-Native ZUPT + Bias Estimation
 
-**Goal:** Fix the Day 2 stationary-detection issue and remove the two
-error sources naive double-integration is most vulnerable to — gravity
-leakage from phone tilt, and constant sensor bias — then re-measure
-drift to log the first real improvement.
+`src/calibration/gravity_compensation.py` (`compute_linear_acceleration()`
+— subtracts the phone's own fused gravity estimate from raw
+accelerometer, no orientation needed). `src/calibration/zupt_classifier.py`
+(`zupt_mask()` — IMU-native stationary detection, fixes Day 2's GPS-lag
+issue). `src/calibration/bias_estimation.py` (`estimate_constant_bias()`,
+`apply_bias_correction()`). Verified on a test drive with a known
+injected bias: bias recovered closely (+0.1675 vs true +0.15 m/s² on
+accel_x), drift cut ~20x on the same drive (3213.93 m → 149.96 m).
+
+**Caveat:** verified against a locally-built stand-in test drive, not
+the user's real `synthetic_data.py` (still not shared — see `context.md`
+Section 5).
+
+**Issue found:** `zupt_mask()`'s default thresholds only reach ~6%
+precision against GPS on the current straight-line synthetic generator
+— carried into Day 4/5.
+
+---
+
+## Day 4 (part 1 of 2) — Mount Alignment: LEVELING
+
+**Goal:** Correct for the phone's mounting orientation so acceleration
+is expressed in the vehicle's frame, not the phone's. Full mount
+alignment is two independent sub-problems — leveling (roll/pitch, from
+gravity) and heading (yaw, needs a second signal) — and rather than
+ship both half-verified, **today's scope was leveling only**; heading
+estimation + the drift re-run are Day 4 part 2, next session.
 
 **What was built:**
-- `src/calibration/gravity_compensation.py` — `compute_linear_acceleration()`.
-  The IO-VNBD smartphone schema conveniently provides both raw
-  accelerometer (`accel_{x,y,z}_mps2`, gravity-inclusive) AND the
-  phone's own fused gravity estimate (`gravity_{x,y,z}_mps2`).
-  Subtracting one from the other gives linear acceleration
-  (`lin_accel_{x,y,z}_mps2`) **without needing to know the phone's
-  mounting orientation** — this has to happen before bias estimation,
-  or a constant tilt-induced gravity component gets misattributed as
-  sensor bias.
-- `src/calibration/zupt_classifier.py` — `zupt_mask()`: an IMU-native
-  stationary detector using windowed rolling std of linear-acceleration
-  magnitude AND gyro magnitude (both must be below threshold), replacing
-  Day 2's GPS-lag-prone detector. `evaluate_zupt_against_gps()` cross-checks
-  agreement against the (independent, imperfect) GPS-speed reference.
-- `src/calibration/bias_estimation.py` — `estimate_constant_bias()`
-  (mean of each linear-accel/gyro channel during ZUPT-flagged stationary
-  windows — at true rest these should read exactly zero, so any nonzero
-  mean IS the bias), `apply_bias_correction()`, and the Day 3 orchestration
-  script that runs gravity compensation → ZUPT → bias estimation →
-  correction → re-runs `naive_double_integrate()` on the corrected signal
-  → logs the result as a new `results/metrics.md` row.
+- `src/calibration/mount_alignment.py` —
+  - `rotation_from_vectors(a, b)`: general Rodrigues shortest-arc
+    rotation between two vectors (small reusable utility, will also be
+    needed for the heading step in part 2).
+  - `estimate_leveling_rotation(df, stationary_mask)`: aligns the mean
+    measured gravity vector (during ZUPT-flagged stationary windows) to
+    `VEHICLE_UP`. Correct up to an unknown rotation about the vertical
+    axis — exactly the ambiguity part 2 resolves.
+  - `recovered_roll_pitch_deg(R_level)`: reports the tilt angles being
+    corrected, for sanity-checking/logging only, not used downstream.
 
-**Verified:** Built and tested against a locally-constructed test drive
-with a **known, deliberately injected** constant bias (accel_x +0.15 m/s²,
-gyro_yaw +0.02 rad/s, plus a +0.30 m/s² constant gravity-tilt component
-on the x-axis) — specifically so the bias estimator's output could be
-checked against ground truth:
-- **Bias recovery:** estimated +0.1675 m/s² (true +0.15) on accel_x,
-  +0.0203 rad/s (true +0.02) on gyro_yaw — both close, small residual
-  from noise + imperfect stationary-window selection.
-- **Drift improvement, same drive, apples-to-apples:** naive
-  double-integration on raw `accel_x_mps2` (uncorrected, gravity leakage
-  + bias both present) → **3213.93 m final error** (this drive's bias
-  makes Day 2's raw-signal approach catastrophic, as expected — double
-  integration of ANY nonzero constant bias explodes quadratically with
-  time). After gravity compensation + bias correction → **149.96 m
-  final error, 67.82 m RMSE** — roughly a **20x reduction**, logged as
-  the Day 3 row in `results/metrics.md`.
+**Sign convention resolved (not assumed):** before writing any code,
+checked what Android's `TYPE_GRAVITY` sensor convention actually is —
+same sign as the accelerometer at rest, i.e. `gravity_z_mps2 ≈ +9.81`
+when the phone lies flat screen-up. `VEHICLE_UP = (0, 0, +1)` is the
+leveling target for that reason. This matters: an earlier draft of this
+file (written before checking) had targeted vehicle-*down* instead,
+which would have silently flipped the leveled z-axis. Documented in the
+module docstring as something to re-confirm against real IO-VNBD data,
+since a flipped sign in a real drive's export would mean the phone was
+mounted screen-down for that recording, not a convention error.
 
-**⚠️ Caveat — not yet validated on the user's real data:** this sandbox
-does not have the user's actual `synthetic_data.py` (only
-`io_vnbd_loader.py` has been confirmed against the real file so far, per
-`context.md`), so Day 3's numbers above are from a locally-built
-stand-in test drive, not the project's real synthetic generator. The
-**code and logic are what's verified** (imports match the real
-`io_vnbd_loader.py` interface, gravity-compensation math is
-dataset-schema-correct, bias estimation is proven to recover a known
-injected bias) — re-run `src/calibration/bias_estimation.py` against the
-real `data/raw/SYNTH-drive1.csv` to get the numbers that actually belong
-in the project's own `results/metrics.md`.
+**Verified — two separate checks:**
+1. **Purpose-built known-tilt test** (roll +12.0°, pitch −7.0°
+   deliberately injected into a synthetic gravity vector, not from any
+   real or existing drive file): `estimate_leveling_rotation()` recovered
+   roll = 11.995°, pitch = −7.0006° — both accurate to well within the
+   injected sensor noise. The leveled gravity vector landed at
+   `[9.17e-05, -8.3e-04, 9.80999996]` — magnitude and direction correct.
+2. **Ran end-to-end against the real Days 1-3 pipeline** (gravity
+   compensation → ZUPT → this drive's stationary mask) without error,
+   from multiple working directories.
 
-**Issue found (carries into Day 4/5):** `zupt_mask()`'s default
-thresholds (accel_var 0.05, gyro_var 0.02 — set from Day 2's measured
-noise floor with margin) only reach ~6% precision against the GPS-speed
-reference on the current straight-line synthetic generator, because its
-abrupt (linspace) accel/brake transitions inflate rolling variance right
-at the true stop instant — the same lag problem as Day 2, now visible
-from the other direction. Two independent fixes worth doing before
-Phase 4 depends on ZUPT: (1) smooth the synthetic generator's speed
-profile transitions (ease-in/out instead of linspace) so stationary
-windows are less ambiguous even in test data, and (2) once real IO-VNBD
-data is available, retune thresholds against its real stationary noise
-floor rather than synthetic data's edge cases.
+**Caveat on check 2's specific numbers:** the existing
+`data/raw/SYNTH-drive1.csv` in this sandbox (left over from earlier
+day's ad hoc bias-injection testing, not the user's real
+`synthetic_data.py`) has arbitrary gravity values that don't represent
+a physically real phone tilt — it produced a nonsensical "177° roll".
+This is expected and NOT a bug: check 1 (the purpose-built test) is
+what validates correctness; check 2 only confirms the code runs without
+error against real pipeline data shapes. Re-run
+`src/calibration/mount_alignment.py` once the real `synthetic_data.py`
+or actual IO-VNBD data is available to get a meaningful tilt number.
 
-**Decisions made:**
-- Gravity compensation runs before bias estimation, always — order
-  matters, since gravity leakage and constant bias are two different
-  error sources conflated in raw `accel_x_mps2`.
-- Bias is estimated as a single constant per channel (not time-varying)
-  — consistent with the "constant-bias" MEMS sensor model assumed in
-  the problem statement; a slowly time-varying bias model is a possible
-  future refinement if real data shows drift in the bias itself.
-- Mount alignment (rotating the phone's coordinate frame into the
-  vehicle's forward/lateral/vertical frame) is deferred to Day 4 — it
-  depends on having clean, bias-corrected linear acceleration first, and
-  needs stretches of real turning/cornering motion to observe, which the
-  current straight-line-only synthetic drive can't fully exercise.
+**Explicitly NOT done today (Day 4 part 2):**
+- Heading (yaw) estimation from accelerating-phase correlation with GPS
+- `apply_mount_alignment()` to actually rotate `lin_accel_*_cal` into
+  the vehicle frame
+- Re-running the drift baseline on the mount-aligned signal
+- Logging a Day 4 row to `results/metrics.md`
 
-**Next (Day 4):** Mount alignment — estimate the phone's orientation
-relative to the vehicle body frame (e.g. via gravity-vector alignment at
-rest + heading correlation with GPS bearing during motion), rotate
-`lin_accel_{x,y,z}_mps2_cal` into the vehicle frame, and re-run the drift
-baseline again. Also: smooth the synthetic generator's transition
-profile per the ZUPT issue above, and retune `zupt_mask()` thresholds.
+**Next (Day 4 part 2):** heading estimation via horizontal
+linear-acceleration direction during GPS-speed-increasing windows,
+combine with today's `R_level` into a single phone→vehicle rotation,
+apply it, re-run `naive_double_integrate()` on
+`lin_accel_x_mps2_cal_veh`, and log the Day 4 row.
 
 **Files:**
 ```
@@ -193,7 +150,7 @@ idr-project/
 │   │   ├── gravity_compensation.py
 │   │   ├── zupt_classifier.py
 │   │   ├── bias_estimation.py
-│   │   └── mount_alignment.py      (empty — Day 4)
+│   │   └── mount_alignment.py      (leveling only — heading pending)
 │   ├── models/                      (empty — Day 6)
 │   ├── dead_reckoning/
 │   │   └── naive_drift_baseline.py
@@ -206,7 +163,7 @@ idr-project/
 ├── mobile_app/               (empty — Day 15)
 ├── tests/                     (empty)
 └── results/
-    ├── metrics.md              (Day 2 + Day 3 rows)
+    ├── metrics.md              (Day 2 + Day 3 rows; Day 4 pending part 2)
     └── plots/
         ├── day1_imu_sanity_check.png
         ├── day2_eda_imu_distributions.png

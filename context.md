@@ -13,31 +13,20 @@
 
 **Goal:** Build an AI/ML-based Intelligent Dead Reckoning (IDR) system
 for seamless vehicle navigation on a smartphone — i.e., keep producing
-an accurate position estimate using only the phone's IMU (accelerometer
-+ gyroscope + magnetometer) during GPS-denied periods (tunnels, urban
-canyons, parking structures), and hand off seamlessly back to GNSS when
-signal returns.
+an accurate position estimate using only the phone's IMU during
+GPS-denied periods, and hand off seamlessly back to GNSS when signal
+returns.
 
-**Approach (classical + ML hybrid, per problem statement):**
-- Classical strapdown INS (orientation integration + Zero-velocity
-  UPdaTe / ZUPT) as the mechanical backbone
-- AI/ML correction layer: a learned forward-velocity model (replaces
-  naive double-integration) + adaptive fusion noise estimation
-- OSM road-network map matching with Non-Holonomic Constraints (a
-  vehicle can't move sideways) to snap noisy DR output back onto plausible
-  roads
-- GNSS + INS sensor fusion via UKF/EKF, with seamless handoff between
-  GNSS-available and GNSS-denied periods
+**Approach (classical + ML hybrid, per problem statement):** classical
+strapdown INS (orientation integration + ZUPT) + a learned
+forward-velocity model + adaptive fusion noise, OSM map matching with
+Non-Holonomic Constraints, GNSS+INS fusion via UKF/EKF.
 
-**Dataset:** IO-VNBD (Inertial and Odometry Vehicle Navigation Benchmark
-Dataset — Onyekpe, Palade, Kanarachos & Szkolnik, Data in Brief 2021).
-Smartphone recordings (`S-*.csv`, AndroSensor app, 10 Hz IMU + 1 Hz GPS)
-are the primary input; the sandbox has no internet, so a synthetic
-generator matching the same schema is used for all dev/test work until
-real data is run in a local/Colab environment.
-
-**Deliverable (Day 15):** an edge-deployable engine + mobile app that
-runs this whole pipeline on-device.
+**Dataset:** IO-VNBD (Onyekpe, Palade, Kanarachos & Szkolnik, Data in
+Brief 2021). Smartphone recordings (`S-*.csv`) are the primary input;
+this sandbox has no internet, so a synthetic generator matching the same
+schema is used for dev/test until real data is run in a local/Colab
+environment.
 
 **Plan:**
 
@@ -52,121 +41,102 @@ runs this whole pipeline on-device.
 | 7 — App & Deployment | 15 | Edge engine API, mobile app UI, packaging, final submission |
 
 **Constraint carried through every phase:** dev sandbox has no internet
-and can't `pip install torch`/`scikit-learn`/`filterpy` — classical
+and can't `pip install torch/scikit-learn/filterpy` — classical
 DSP/filter/Kalman code is built and tested here against synthetic data;
-deep-learning training (Phase 3) and any run against real IO-VNBD data
-happens in the user's own environment (local + internet, or Colab), with
-code handed off ready to run.
+deep-learning training (Phase 3) and real IO-VNBD runs happen in the
+user's own environment.
 
 ---
 
 ## 2. Data Schema (locked — do not rename without updating this file)
 
-Source of truth: `src/io_vnbd_loader.py`, function `load_smartphone_drive()`.
-This is the **real, verified** schema (confirmed against the user's
-actual file on 2026-09-23) — every downstream script must import these
-exact names, not invent its own.
+Source of truth: `src/io_vnbd_loader.py`, `load_smartphone_drive()`.
+Real, verified schema (confirmed against the user's actual file).
 
-### Raw columns (as loaded from CSV, 24 cols + derived)
-
-| Column | Meaning | Unit |
-|---|---|---|
-| `gps_lat_deg` | GPS latitude | degrees |
-| `gps_lon_deg` | GPS longitude | degrees |
-| `gps_alt_m` | GPS altitude | meters |
-| `gps_speed_kmh` | GPS speed | km/h — present at full 10 Hz IMU rate, no separate fix flag |
-| `gps_accuracy_m` | GPS horizontal accuracy | meters |
-| `gps_orientation_deg` | GPS-derived heading | degrees |
-| `gps_satellites_in_range` | satellite count | count |
-| `time_since_start_ms` | raw elapsed time | milliseconds |
-| `datetime` | wall-clock timestamp | parsed to pandas Timestamp (best-effort, NaT on failure) |
-| `accel_x_mps2`, `accel_y_mps2`, `accel_z_mps2` | raw accelerometer (gravity-inclusive) | m/s² |
-| `gravity_x_mps2`, `gravity_y_mps2`, `gravity_z_mps2` | phone's fused gravity estimate | m/s² |
-| `gyro_yaw_rads`, `gyro_pitch_rads`, `gyro_roll_rads` | raw gyroscope | rad/s |
-| `mag_x_ut`, `mag_y_ut`, `mag_z_ut` | raw magnetometer | µT |
-| `orientation_yaw_deg`, `orientation_pitch_deg`, `orientation_roll_deg` | phone-fused orientation | degrees |
+### Raw columns
+`gps_lat_deg`, `gps_lon_deg`, `gps_alt_m`, `gps_speed_kmh` (full 10 Hz
+rate, no fix flag), `gps_accuracy_m`, `gps_orientation_deg`,
+`gps_satellites_in_range`, `time_since_start_ms`, `datetime`,
+`accel_{x,y,z}_mps2` (raw, gravity-inclusive), `gravity_{x,y,z}_mps2`
+(phone's fused gravity estimate — **sign convention: ≈(0,0,+9.81) when
+level, same convention as accelerometer at rest; re-confirm on real
+data, see Section 5**), `gyro_{yaw,pitch,roll}_rads`, `mag_{x,y,z}_ut`,
+`orientation_{yaw,pitch,roll}_deg`.
 
 ### Derived columns
 
 | Column | Meaning | Added by |
 |---|---|---|
-| `t_sec` | seconds since drive start — **the canonical time axis used everywhere downstream, not `datetime` or `time_since_start_ms`** | `io_vnbd_loader.load_smartphone_drive()` |
-| `lin_accel_x_mps2`, `lin_accel_y_mps2`, `lin_accel_z_mps2` | gravity-compensated linear acceleration, `= accel_*_mps2 - gravity_*_mps2` | `calibration/gravity_compensation.compute_linear_acceleration()` (Day 3) |
-| `<col>_cal` (e.g. `lin_accel_x_mps2_cal`, `gyro_yaw_rads_cal`) | bias-corrected version of any BIAS_COLS channel, `= col - estimated_bias[col]` | `calibration/bias_estimation.apply_bias_correction()` (Day 3) |
+| `t_sec` | seconds since drive start — canonical time axis | `io_vnbd_loader.load_smartphone_drive()` |
+| `lin_accel_{x,y,z}_mps2` | gravity-compensated linear accel, `= accel - gravity` | `gravity_compensation.compute_linear_acceleration()` (Day 3) |
+| `<col>_cal` | bias-corrected version, `= col - estimated_bias[col]` | `bias_estimation.apply_bias_correction()` (Day 3) |
+| `lin_accel_{x,y,z}_mps2_cal_veh` | vehicle-frame (mount-aligned) linear accel — **NOT YET PRODUCED**, needs heading (Day 4 part 2) before it can be computed | `mount_alignment.apply_mount_alignment()` — function doesn't exist yet |
 
-**Naming convention to keep:** axis suffix (`_x/_y/_z` or `_yaw/_pitch/_roll`)
-+ unit suffix (`_mps2`, `_rads`, `_deg`, `_ut`, `_kmh`, `_m`), derived
-columns prefixed by what they are (`lin_`) and suffixed `_cal` once
-bias-corrected. A **mount-aligned** (vehicle-frame) version of a channel,
-once Day 4 builds it, should follow the same pattern — e.g.
-`lin_accel_x_mps2_cal_veh`, not a new naming scheme.
+**Naming convention:** axis suffix + unit suffix, `_cal` once
+bias-corrected, `_veh` once rotated into the vehicle frame.
 
 ---
 
-## 3. Function Registry (grows every day — append, don't duplicate)
+## 3. Function Registry
 
 ### `src/io_vnbd_loader.py`
-| Name | Signature | Returns | Notes |
-|---|---|---|---|
-| `load_smartphone_drive` | `(csv_path: str \| Path, header: int \| None = None) -> pd.DataFrame` | tidy DataFrame, schema above + `t_sec` | header=0 if CSV already has its own header row |
-| `drive_summary` | `(df: pd.DataFrame) -> dict` | `{n_samples, duration_s, duration_min, median_dt_s, implied_rate_hz, gps_speed_max_kmh, gps_speed_mean_kmh}` | sanity check right after loading |
-| `SMARTPHONE_COLUMNS` | module-level list | — | the 24 raw column names, in order |
-| `SMARTPHONE_SAMPLE_RATE_HZ` / `SMARTPHONE_GPS_RATE_HZ` | module-level float | `10.0` / `1.0` | — |
+| Name | Signature | Returns |
+|---|---|---|
+| `load_smartphone_drive` | `(csv_path, header=None) -> pd.DataFrame` | tidy DataFrame + `t_sec` |
+| `drive_summary` | `(df) -> dict` | sanity-check stats |
 
 ### `src/utils/synthetic_data.py`
-**⚠️ Still not verified against the user's real file — only reconstructed.**
-Function name(s) and output shape (module-level constants, `df.attrs`
-usage for ground truth, etc.) are unconfirmed. Upload this file before
-any code assumes its interface — Day 3's numbers were validated against
-a locally-built stand-in drive for exactly this reason (see PROGRESS.md
-Day 3 caveat).
+**⚠️ Still not verified against the user's real file.** Highest-priority
+upload still outstanding.
 
 ### `src/eda.py`
-| Name | Signature | Returns | Notes |
-|---|---|---|---|
-| `channel_stats` | `(df: pd.DataFrame) -> pd.DataFrame` | mean/std/min/max per IMU channel | uses `IMU_ACCEL_COLS`, `IMU_GYRO_COLS` |
-| `stationary_mask` | `(df: pd.DataFrame, speed_thresh_kmh: float = 1.0) -> np.ndarray` | bool array | GPS-based; superseded for calibration purposes by `zupt_classifier.zupt_mask()` (Day 3), kept here for EDA/reference |
-| `stationary_noise_floor` | `(df: pd.DataFrame, mask: np.ndarray) -> dict` | channel → std | sensor noise floor |
-| `plot_distributions` | `(df, out_path)` | writes PNG | histograms of 6 IMU channels |
-| `plot_stationary_noise` | `(df, mask, out_path)` | writes PNG | accel_x + GPS speed w/ stationary overlay |
-| `run_eda` | `(df, plots_dir="results/plots") -> dict` | `{channel_stats, n_stationary_samples, pct_stationary, stationary_noise_floor_std}` | top-level entry point |
-| `IMU_ACCEL_COLS` | `["accel_x_mps2", "accel_y_mps2", "accel_z_mps2"]` | — | module-level constant |
-| `IMU_GYRO_COLS` | `["gyro_yaw_rads", "gyro_pitch_rads", "gyro_roll_rads"]` | — | module-level constant |
+`channel_stats`, `stationary_mask` (GPS-based, superseded for
+calibration by `zupt_classifier.zupt_mask`), `stationary_noise_floor`,
+`plot_distributions`, `plot_stationary_noise`, `run_eda`.
+`IMU_ACCEL_COLS`, `IMU_GYRO_COLS`.
 
 ### `src/dead_reckoning/naive_drift_baseline.py`
-| Name | Signature | Returns | Notes |
-|---|---|---|---|
-| `naive_double_integrate` | `(df, accel_col="accel_x_mps2") -> dict` | `{t, velocity, position}` | zero correction; **reused as-is in Day 3** with `accel_col="lin_accel_x_mps2_cal"` — this is why the function takes `accel_col` as a parameter, don't fork it |
-| `gps_reference_distance` | `(df: pd.DataFrame) -> np.ndarray` | cumulative distance from `gps_speed_kmh` | ground-truth fallback |
-| `evaluate_drift` | `(df, true_distance_m=None) -> dict` | adds `true_distance_m, error, final_error_m, final_true_distance_m, drift_rate_m_per_min, rmse_position_m` to the integrate dict | pass `true_distance_m` explicitly if a better reference exists |
-| `plot_drift` | `(eval_result, out_path, title="Day 2 — Naive Double-Integration Drift Baseline (zero correction)")` | writes PNG | **`title` is a parameter as of Day 3** — always pass an accurate one when reusing this for a later day, don't rely on the default |
-| `log_metric` | `(metrics_path, eval_result)` | appends row | writes `results/metrics.md` — hardcodes the "Day 2" method label, so Day 3+ scripts write their own metrics-row `open()`/`write()` instead of calling this (see `bias_estimation.py`'s `__main__`) rather than editing this function's label |
+| Name | Signature | Notes |
+|---|---|---|
+| `naive_double_integrate` | `(df, accel_col="accel_x_mps2") -> dict` | generic — reused with different `accel_col` every day since Day 3 |
+| `gps_reference_distance` | `(df) -> np.ndarray` | ground truth |
+| `evaluate_drift` | `(df, true_distance_m=None) -> dict` | — |
+| `plot_drift` | `(eval_result, out_path, title="Day 2 — ...")` | `title` is a parameter as of Day 3 — always pass one explicitly |
+| `log_metric` | `(metrics_path, eval_result)` | hardcodes "Day 2" method label — Day 3+ scripts write their own metrics row instead of calling this |
 
 ### `src/calibration/gravity_compensation.py` (Day 3)
-| Name | Signature | Returns | Notes |
-|---|---|---|---|
-| `compute_linear_acceleration` | `(df: pd.DataFrame) -> pd.DataFrame` | copy of df + `lin_accel_{x,y,z}_mps2` | must run before `zupt_classifier` or `bias_estimation` |
-| `AXES` | `["x", "y", "z"]` | — | module-level constant |
+`compute_linear_acceleration(df) -> pd.DataFrame`. `AXES = ["x","y","z"]`.
 
 ### `src/calibration/zupt_classifier.py` (Day 3)
-| Name | Signature | Returns | Notes |
-|---|---|---|---|
-| `zupt_mask` | `(df, accel_var_thresh=0.05, gyro_mag_thresh=0.02, window=5) -> np.ndarray` | bool array | requires `lin_accel_{x,y,z}_mps2` already present; defaults set from Day 2's noise floor, **not yet tuned against a real drive** — see PROGRESS.md Day 3 issue |
-| `evaluate_zupt_against_gps` | `(mask, df, speed_thresh_kmh=1.0) -> dict` | `{n_zupt_flagged, n_gps_stationary, agreement_precision, agreement_recall}` | sanity cross-check only, GPS isn't ground truth either |
-| `LIN_ACCEL_COLS` | `["lin_accel_x_mps2", "lin_accel_y_mps2", "lin_accel_z_mps2"]` | — | module-level constant |
-| `GYRO_COLS` | `["gyro_yaw_rads", "gyro_pitch_rads", "gyro_roll_rads"]` | — | module-level constant |
+`zupt_mask(df, accel_var_thresh=0.05, gyro_mag_thresh=0.02, window=5) -> np.ndarray`
+(defaults not yet tuned against real data — see Section 5).
+`evaluate_zupt_against_gps(mask, df, speed_thresh_kmh=1.0) -> dict`.
+`LIN_ACCEL_COLS`, `GYRO_COLS`.
 
 ### `src/calibration/bias_estimation.py` (Day 3)
+`estimate_constant_bias(df, mask, cols=BIAS_COLS) -> dict`.
+`apply_bias_correction(df, bias) -> pd.DataFrame`. `BIAS_COLS` (the 6
+lin_accel/gyro channels bias is estimated for).
+
+### `src/calibration/mount_alignment.py` (Day 4 part 1 — LEVELING ONLY)
 | Name | Signature | Returns | Notes |
 |---|---|---|---|
-| `estimate_constant_bias` | `(df, mask, cols=BIAS_COLS) -> dict` | `{col_name: bias_value}` | mean of each channel during ZUPT-flagged stationary windows |
-| `apply_bias_correction` | `(df, bias: dict) -> pd.DataFrame` | copy of df + `<col>_cal` columns | — |
-| `BIAS_COLS` | `["lin_accel_x_mps2", "lin_accel_y_mps2", "lin_accel_z_mps2", "gyro_yaw_rads", "gyro_pitch_rads", "gyro_roll_rads"]` | — | module-level constant — the 6 channels bias is estimated for |
+| `rotation_from_vectors` | `(a: np.ndarray, b: np.ndarray) -> np.ndarray` | 3×3 rotation matrix | general Rodrigues shortest-arc rotation; will be reused for heading in part 2 |
+| `estimate_leveling_rotation` | `(df, stationary_mask) -> np.ndarray` | 3×3 rotation matrix (phone→vehicle, roll+pitch only, yaw ambiguous) | uses raw `gravity_{x,y,z}_mps2`, NOT the bias-corrected linear accel — leveling doesn't need bias correction |
+| `recovered_roll_pitch_deg` | `(R_level) -> dict` | `{roll_deg, pitch_deg}` | sanity-check/logging only, not used downstream |
+| `VEHICLE_UP` | `np.array([0,0,1.0])` | — | leveling target — see Section 2's sign-convention note |
+| `GRAVITY_COLS` | `["gravity_x_mps2", "gravity_y_mps2", "gravity_z_mps2"]` | — | — |
 
-### Not yet built (reserve these module paths, don't rename on arrival)
+**Functions that do NOT exist yet (Day 4 part 2, next session):**
+`accelerating_mask()`, `estimate_heading_offset()`,
+`estimate_mount_rotation()` (the part-1+part-2 combiner),
+`apply_mount_alignment()`. Don't assume these are callable — check this
+file's actual content first, since the registry will be updated once
+they're built and verified.
+
+### Not yet built (reserve these module paths)
 | Phase | Expected file(s) |
 |---|---|
-| 2 (Day 4–5) | `src/calibration/mount_alignment.py` |
 | 3 (Days 6–8) | `src/models/velocity_model.py` |
 | 4 (Days 9–10) | `src/dead_reckoning/strapdown_ins.py` |
 | 5 (Days 11–12) | `src/map_matching/osm_graph.py`, `src/map_matching/hmm_matcher.py` |
@@ -177,47 +147,51 @@ Day 3 caveat).
 
 ## 4. Results Log Format (locked)
 
-`results/metrics.md` — one row per phase/day, columns:
-`Phase / Day | Method | Final position error (m) | Drift rate (m/min) | RMSE (m)`
+`results/metrics.md` — `Phase / Day | Method | Final position error (m) | Drift rate (m/min) | RMSE (m)`
 
-Current rows (numbers are from a locally-built test drive with a known
-injected bias, NOT the project's real `SYNTH-drive1.csv` — see PROGRESS.md
-Day 3 caveat; re-run against the real drive before trusting these for
+Current rows (Day 2/3 numbers are from locally-built test drives, NOT
+the user's real `SYNTH-drive1.csv` — re-run before trusting for
 reporting):
-- Day 2 — Naive double-integration (zero correction) — 41.99 m — 21.01 m/min — 20.71 m RMSE *(original run, no injected bias)*
-- Day 3 — Gravity-compensated + bias-corrected double integration — 149.96 m — 75.04 m/min — 67.82 m RMSE *(on a separate, bias-injected test drive; ~20x better than the same-drive uncorrected baseline of 3213.93 m)*
+- Day 2 — Naive double-integration — 41.99 m — 21.01 m/min — 20.71 m RMSE
+- Day 3 — Gravity-comp + bias-corrected — 149.96 m — 75.04 m/min — 67.82 m RMSE (vs. 3213.93 m same-drive uncorrected)
+- **Day 4 — not yet logged.** Part 1 (leveling) has no drift number of
+  its own — leveling alone doesn't change `accel_x`'s forward-axis
+  reading meaningfully until heading (part 2) is also applied and the
+  full rotation is used to re-derive the forward axis.
 
 ---
 
 ## 5. Known Open Issues (carry forward until resolved)
 
-- **`synthetic_data.py` still unconfirmed:** function names, output
-  columns, and any `df.attrs` ground-truth convention are guessed, not
-  verified. Highest-priority file to upload next.
-- **ZUPT threshold tuning:** `zupt_classifier.zupt_mask()` defaults
-  (accel_var 0.05, gyro_var 0.02) reach poor precision (~6%) against
-  GPS on the current synthetic generator, because its abrupt
-  accel/brake transitions inflate variance right at the true stop
-  instant. Needs (a) a smoother synthetic transition profile and (b)
-  retuning against real IO-VNBD data.
-- **Straight-line-only synthetic drives:** no turning/curved roads yet
-  — blocks fully exercising Day 4's mount-alignment heading correlation
-  and is required before Phase 5's map matcher.
-- **Bias model is constant-only:** if real data shows the bias itself
-  drifting slowly over a long drive, `estimate_constant_bias()` will
-  need to become windowed/time-varying rather than a single scalar per
-  channel.
+- **`synthetic_data.py` still unconfirmed** — highest priority.
+- **ZUPT threshold tuning** — poor precision (~6%) against GPS on the
+  synthetic generator; needs smoother transitions + real-data retuning.
+- **Straight-line-only synthetic drives** — blocks fully exercising
+  heading estimation (Day 4 part 2) and is required before Phase 5.
+- **Bias model is constant-only** — may need to become time-varying if
+  real data shows bias drift.
+- **NEW — gravity sign convention on real data unconfirmed:**
+  `mount_alignment.py` assumes `gravity_z_mps2 ≈ +9.81` at rest
+  (Android `TYPE_GRAVITY` standard convention). Check this against an
+  actual stationary window in real IO-VNBD data before trusting
+  `estimate_leveling_rotation()`'s output on it — if the real sign is
+  flipped, either the phone was mounted screen-down for that drive, or
+  `VEHICLE_UP` needs to become `VEHICLE_DOWN` in the code.
+- **NEW — Day 4 part 1's own test drive (`data/raw/SYNTH-drive1.csv` as
+  it currently sits in this sandbox) is not physically meaningful for
+  leveling** — it's a leftover from Day 3's ad hoc bias-injection test,
+  not a real or representative phone orientation. Leveling correctness
+  was validated on a separate purpose-built known-tilt test instead
+  (see PROGRESS.md Day 4). Re-run against the real `synthetic_data.py`
+  or actual IO-VNBD data once available.
 
 ---
 
 ## How to use this file
 
-1. At the start of a new day's session, upload `PROGRESS.md`,
-   `context.md`, and the specific source file(s) that day's code will
-   import from (per the Function Registry above) — `synthetic_data.py`
-   is the highest-priority upload still outstanding.
-2. After the day's work, update **both**: add the narrative to
-   `PROGRESS.md`, and add any new functions/columns to Section 3 here
-   (or move an entry out of "Not yet built" once it exists).
-3. Never rename an existing entry in Section 2 or 3 without updating
-   every caller — that's the whole point of this file.
+1. Upload `PROGRESS.md`, `context.md`, and the specific source file(s)
+   the next day's code will import from — `synthetic_data.py` is the
+   highest-priority upload still outstanding.
+2. After each day, update both: narrative in `PROGRESS.md`, exact
+   names/signatures in Section 3 here.
+3. Never rename an existing entry without updating every caller.

@@ -42,7 +42,22 @@ if __name__ == "__main__":
     import sys
     from pathlib import Path as _Path
 
-    PROJECT_ROOT = _Path(__file__).resolve().parent.parent.parent
+    def _find_project_root(start: "_Path") -> "_Path":
+        """Walk upward from `start` until a directory containing both
+        'src' and 'data' is found. Robust to this file being moved to a
+        different depth under src/ -- unlike counting a fixed number of
+        .parent levels, which silently breaks (ModuleNotFoundError) if
+        the file isn't exactly where the count assumes."""
+        for candidate in [start] + list(start.parents):
+            if (candidate / "src").is_dir() and (candidate / "data").is_dir():
+                return candidate
+        raise RuntimeError(
+            f"Could not locate the idr-project root (a folder containing "
+            f"both 'src/' and 'data/') above {start}. Check that both "
+            f"folders exist somewhere above this file."
+        )
+
+    PROJECT_ROOT = _find_project_root(_Path(__file__).resolve().parent)
     sys.path.insert(0, str(PROJECT_ROOT))
     from src.io_vnbd_loader import load_smartphone_drive
     from src.calibration.gravity_compensation import compute_linear_acceleration
