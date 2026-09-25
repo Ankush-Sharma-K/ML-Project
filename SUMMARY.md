@@ -176,7 +176,7 @@ numbers haven't been reproduced against the project's own data yet.
 
 ---
 
-### Day 4 (part 1 of 2) — Mount Alignment: Leveling
+### Day 4 — Mount Alignment: Leveling + Heading
 
 **Concept:**
 Days 2–3 cleaned up the *sensor* (gravity leakage, constant bias) but
@@ -191,63 +191,78 @@ freedom:
 1. **Leveling (roll + pitch)** — the gravity vector measured at rest
    must point straight up in the vehicle frame; aligning it does this,
    but leaves an unknown rotation about the vertical axis.
-2. **Heading (yaw)** — needs an independent signal (the vehicle's
-   forward-acceleration direction during a GPS-speed-increasing phase)
-   to resolve the leftover ambiguity from step 1.
+2. **Heading (yaw)** — needs an independent signal to resolve that
+   leftover ambiguity. By the non-holonomic constraint this whole
+   project relies on (a vehicle doesn't move sideways), the vehicle's
+   forward axis is the direction of horizontal linear acceleration
+   during a phase where GPS speed is measurably increasing.
 
-Rather than ship both half-verified, Day 4 was deliberately split:
-**today was leveling only.** Heading estimation, applying the full
-rotation, and re-running the drift baseline are Day 4 part 2.
+This was deliberately split across two sessions rather than shipped
+half-verified: leveling first (verified in isolation), heading second
+(today), once leveling was trusted.
 
 **Coding tasks / what was built:**
-- `src/calibration/mount_alignment.py` —
-  `rotation_from_vectors(a, b)`: general Rodrigues shortest-arc
-  rotation between two vectors (reusable utility, also needed for
-  heading in part 2). `estimate_leveling_rotation(df, stationary_mask)`:
-  aligns the mean measured gravity vector (during ZUPT-flagged
-  stationary windows) to `VEHICLE_UP`. `recovered_roll_pitch_deg()`:
-  reports the tilt angles being corrected, for sanity-checking only.
+- `src/calibration/mount_alignment.py`, extended with:
+  `rotation_about_z(theta)`, `accelerating_mask(df)` (flags samples
+  where `d(gps_speed)/dt` exceeds a threshold), `estimate_heading_offset()`
+  (angle of the mean leveled horizontal linear-acceleration vector
+  during those accelerating windows — requires BIAS-CORRECTED linear
+  acceleration, or leftover bias would skew the angle),
+  `estimate_mount_rotation()` (combines leveling + heading into one
+  phone→vehicle rotation matrix), `apply_mount_alignment()` (produces
+  `lin_accel_{x,y,z}_mps2_cal_veh` — forward/lateral/up in the vehicle
+  frame).
 
-**A real bug caught before shipping:** the gravity-sensor sign
-convention was checked explicitly rather than assumed — Android's
-`TYPE_GRAVITY` reports gravity using the *same* sign as the
-accelerometer at rest (≈+9.81 when level), not the opposite. An
-earlier draft had targeted vehicle-*down* instead of vehicle-*up*,
-which would have silently flipped the leveled z-axis. Fixed and
-documented in the module docstring as something to re-confirm against
-real IO-VNBD data.
+**A real bug caught before shipping (leveling, from the earlier
+session):** the gravity-sensor sign convention was checked explicitly
+rather than assumed — Android's `TYPE_GRAVITY` reports gravity using
+the *same* sign as the accelerometer at rest (≈+9.81 when level), not
+the opposite. An earlier draft had targeted vehicle-*down* instead of
+vehicle-*up*, which would have silently flipped the leveled z-axis.
 
-**Verified two ways:** (1) a purpose-built test with a known injected
-tilt (roll +12.0°, pitch −7.0°) — recovered 11.995°/−7.0006°, accurate
-to well within the injected sensor noise; (2) ran end-to-end against
-the real Days 1–3 pipeline without error, from multiple working
-directories.
+**A second, separate bug — path resolution, not project logic:** after
+that delivery, running the file from a different location than
+expected hit `ModuleNotFoundError`. Root cause: every script resolved
+the project root by counting a *fixed* number of `.parent` levels —
+correct only at one exact file depth. Fixed across all six affected
+files with a function that walks upward looking for a folder
+containing both `src/` and `data/` instead of counting levels.
 
-**A second, separate bug — path resolution, not project logic:**
-after delivery, running `mount_alignment.py` from a different location
-than expected (`src/mount_alignment.py` instead of
-`src/calibration/mount_alignment.py`) hit
-`ModuleNotFoundError: No module named 'src'`. Root cause: every script
-so far (`eda.py`, `naive_drift_baseline.py`, and all Day 3/4
-calibration files) resolved the project root by counting a *fixed*
-number of `.parent` levels up from `__file__` — correct only if the
-file stays at exactly the depth assumed, and silently wrong otherwise.
-Fixed across **all six** affected files at once with a function that
-walks upward looking for a folder containing both `src/` and `data/`,
-instead of counting levels — verified robust to the file being moved,
-and to being run from an arbitrary working directory. (One self-caught
-mistake along the way: the first batch-fix attempt had a regex bug
-that left syntax garbage in `naive_drift_baseline.py`; caught by
-actually re-running every file after the fix, not just assuming it
-worked, and corrected before delivery.)
+**A third finding, today — a diagnostic function's limitation, not a
+pipeline bug:** testing heading estimation needed a test drive with a
+*real* injected yaw misalignment (the earlier leveling-only test had
+none). Once built, `recovered_roll_pitch_deg()` — the human-readable
+roll/pitch readout — reported numbers that looked wrong (≈9.3° vs true
+8.0° roll, ≈−1.6° vs true −5.0° pitch). Rather than assume the rotation
+itself was wrong, this was isolated directly: applying `R_level` to
+the true gravity vector landed within `1e-16` of `[0, 0, 9.81]` —
+the rotation is exactly correct. The bug was in the diagnostic-only
+Euler-angle decomposition, which is ambiguous once real yaw is present
+(the minimal Rodrigues rotation legitimately isn't the same as a naive
+"undo roll, then pitch" inverse when yaw ≠ 0). That function is never
+used downstream — `apply_mount_alignment()` uses the rotation matrices
+directly — so this had zero effect on any actual result, but the
+docstring was tightened so it doesn't mislead future debugging.
 
-**Explicitly not done (Day 4 part 2, next session):** heading/yaw
-estimation from accelerating-phase correlation with GPS,
-`apply_mount_alignment()` to rotate `lin_accel_*_cal` into the vehicle
-frame, re-running the drift baseline on the mount-aligned signal, and
-logging a Day 4 row to `results/metrics.md`.
+**Verified:**
+- **Heading, in isolation:** on a test drive with roll=8.0°,
+  pitch=−5.0°, **yaw=22.0°** all injected, `estimate_heading_offset()`
+  recovered **21.99°** — accurate to 0.01°.
+- **Full pipeline, same drive:** mount-aligned double integration gave
+  **209.54 m** final error, vs. **254.29 m** on the same drive without
+  mount alignment (still in the phone's raw x-axis) — a real but modest
+  ~18% improvement, smaller than Day 3's ~20x. Investigated rather than
+  just reported: since both leveling and heading are now confirmed
+  essentially exact, the remaining ~210 m is dominated by plain sensor
+  *noise* compounding through naive double integration over 120 s (Day
+  2's noise-only baseline alone produced ~42 m from noise with zero
+  injected bias or misalignment) — not something mount alignment can
+  fix. That's specifically what Phase 4's strapdown INS with periodic
+  ZUPT resets (Days 9–10) is for; open-loop double integration, however
+  correctly calibrated and aligned, drifts on noise alone.
 
-**Status:** leveling math verified correct (near-exact recovery on a
-known-tilt test) and mechanically robust (works from any file location
-or working directory, across all six affected scripts) — heading and
-the full Day 4 drift number are still pending.
+**Status:** leveling and heading both verified correct — leveling via
+direct rotation-of-gravity check, heading via near-exact recovery of a
+known injected angle. Day 4 row logged to `results/metrics.md`. Mount
+alignment (Phase 2) is functionally complete; remaining drift is
+noise-driven and is Phase 4's problem, not Phase 2's.

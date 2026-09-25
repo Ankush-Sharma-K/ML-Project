@@ -19,27 +19,23 @@ Trained/evaluated against the IO-VNBD dataset per the problem statement.
 | 6 — GNSS+INS Fusion | 13–14 | UKF/EKF fusion, adaptive noise, seamless GNSS↔DR handoff |
 | 7 — App & Deployment | 15 | Edge engine API, mobile app UI, packaging, final submission |
 
-**Status: Phase 2, Day 4 of 15 — IN PROGRESS (part 1 of 2 complete).**
+**Status: Phase 2, Day 4 of 15 complete.**
 
 ---
 
 ## Day 1 — Repo Scaffold + IO-VNBD Loader + Synthetic Data
 
 Full repo scaffold; `src/io_vnbd_loader.py` (`load_smartphone_drive()`,
-`drive_summary()`); `src/utils/synthetic_data.py` (schema-matching
-synthetic drive generator, no internet in this sandbox). Verified:
-1200-sample synthetic drive loads correctly at the expected 10 Hz.
+`drive_summary()`); `src/utils/synthetic_data.py`. Verified: 1200-sample
+synthetic drive loads correctly at 10 Hz.
 
 ---
 
 ## Day 2 — EDA + Naive Double-Integration Drift Baseline
 
-`src/eda.py` (channel stats, GPS-based stationary detection, noise
-floor). `src/dead_reckoning/naive_drift_baseline.py` (naive
-accel→velocity→position integration, zero correction — the baseline
-every later phase must beat). Verified: 41.99 m final error / 21.01
-m/min drift on a bias-free synthetic drive, logged as the first
-`results/metrics.md` row.
+`src/eda.py`, `src/dead_reckoning/naive_drift_baseline.py`. Verified:
+41.99 m final error / 21.01 m/min drift on a bias-free synthetic drive,
+logged as the first `results/metrics.md` row.
 
 **Issue found:** GPS-speed-based stationary detection lags the true
 stop instant — carried into Day 3.
@@ -48,91 +44,103 @@ stop instant — carried into Day 3.
 
 ## Day 3 — Gravity Compensation + IMU-Native ZUPT + Bias Estimation
 
-`src/calibration/gravity_compensation.py` (`compute_linear_acceleration()`
-— subtracts the phone's own fused gravity estimate from raw
-accelerometer, no orientation needed). `src/calibration/zupt_classifier.py`
-(`zupt_mask()` — IMU-native stationary detection, fixes Day 2's GPS-lag
-issue). `src/calibration/bias_estimation.py` (`estimate_constant_bias()`,
-`apply_bias_correction()`). Verified on a test drive with a known
-injected bias: bias recovered closely (+0.1675 vs true +0.15 m/s² on
-accel_x), drift cut ~20x on the same drive (3213.93 m → 149.96 m).
+`src/calibration/gravity_compensation.py`, `zupt_classifier.py`,
+`bias_estimation.py`. Verified on a test drive with known injected
+bias: recovered closely (+0.1675 vs true +0.15 m/s²), drift cut ~20x
+on the same drive (3213.93 m → 149.96 m).
 
 **Caveat:** verified against a locally-built stand-in test drive, not
-the user's real `synthetic_data.py` (still not shared — see `context.md`
-Section 5).
+the user's real `synthetic_data.py` (still not shared).
 
-**Issue found:** `zupt_mask()`'s default thresholds only reach ~6%
-precision against GPS on the current straight-line synthetic generator
-— carried into Day 4/5.
+**Issue found:** `zupt_mask()` default thresholds reach only ~6%
+precision against GPS on the synthetic generator — carried into Day 4/5.
 
 ---
 
-## Day 4 (part 1 of 2) — Mount Alignment: LEVELING
+## Day 4 — Mount Alignment: Leveling + Heading
 
-**Goal:** Correct for the phone's mounting orientation so acceleration
-is expressed in the vehicle's frame, not the phone's. Full mount
-alignment is two independent sub-problems — leveling (roll/pitch, from
-gravity) and heading (yaw, needs a second signal) — and rather than
-ship both half-verified, **today's scope was leveling only**; heading
-estimation + the drift re-run are Day 4 part 2, next session.
+**Goal:** Express acceleration in the vehicle's frame (forward/lateral/
+up), not the phone's — the phone can be mounted at any orientation.
+Gravity alone can only constrain 2 of 3 rotational degrees of freedom,
+so this is genuinely two sub-problems, done across two sessions so
+neither shipped half-verified.
 
-**What was built:**
-- `src/calibration/mount_alignment.py` —
-  - `rotation_from_vectors(a, b)`: general Rodrigues shortest-arc
-    rotation between two vectors (small reusable utility, will also be
-    needed for the heading step in part 2).
-  - `estimate_leveling_rotation(df, stationary_mask)`: aligns the mean
-    measured gravity vector (during ZUPT-flagged stationary windows) to
-    `VEHICLE_UP`. Correct up to an unknown rotation about the vertical
-    axis — exactly the ambiguity part 2 resolves.
-  - `recovered_roll_pitch_deg(R_level)`: reports the tilt angles being
-    corrected, for sanity-checking/logging only, not used downstream.
+**What was built (part 1 — leveling):**
+- `src/calibration/mount_alignment.py` — `rotation_from_vectors(a, b)`
+  (general Rodrigues shortest-arc rotation), `estimate_leveling_rotation()`
+  (aligns mean stationary gravity to `VEHICLE_UP`), `recovered_roll_pitch_deg()`
+  (diagnostic only).
+- **Sign convention resolved, not assumed:** confirmed Android's
+  `TYPE_GRAVITY` uses the same sign as the accelerometer at rest
+  (≈+9.81 when level) before writing any code — an earlier draft had
+  targeted vehicle-down instead, which would have silently flipped the
+  leveled z-axis.
+- **Verified:** purpose-built known-tilt test (roll +12.0°, pitch
+  −7.0° injected) recovered 11.995°/−7.0006°.
 
-**Sign convention resolved (not assumed):** before writing any code,
-checked what Android's `TYPE_GRAVITY` sensor convention actually is —
-same sign as the accelerometer at rest, i.e. `gravity_z_mps2 ≈ +9.81`
-when the phone lies flat screen-up. `VEHICLE_UP = (0, 0, +1)` is the
-leveling target for that reason. This matters: an earlier draft of this
-file (written before checking) had targeted vehicle-*down* instead,
-which would have silently flipped the leveled z-axis. Documented in the
-module docstring as something to re-confirm against real IO-VNBD data,
-since a flipped sign in a real drive's export would mean the phone was
-mounted screen-down for that recording, not a convention error.
+**What was built (part 2 — heading, completes Day 4):**
+- Extended `mount_alignment.py` with `rotation_about_z()`,
+  `accelerating_mask()` (flags GPS-speed-increasing samples),
+  `estimate_heading_offset()` (angle of mean leveled horizontal linear
+  acceleration during those windows — requires bias-corrected input),
+  `estimate_mount_rotation()` (combines leveling + heading into one
+  phone→vehicle rotation), `apply_mount_alignment()` (produces
+  `lin_accel_{x,y,z}_mps2_cal_veh`).
 
-**Verified — two separate checks:**
-1. **Purpose-built known-tilt test** (roll +12.0°, pitch −7.0°
-   deliberately injected into a synthetic gravity vector, not from any
-   real or existing drive file): `estimate_leveling_rotation()` recovered
-   roll = 11.995°, pitch = −7.0006° — both accurate to well within the
-   injected sensor noise. The leveled gravity vector landed at
-   `[9.17e-05, -8.3e-04, 9.80999996]` — magnitude and direction correct.
-2. **Ran end-to-end against the real Days 1-3 pipeline** (gravity
-   compensation → ZUPT → this drive's stationary mask) without error,
-   from multiple working directories.
+**Verified:**
+- Built a new test drive with a full 3D mount misalignment injected
+  (roll=8.0°, pitch=−5.0°, **yaw=22.0°** — the earlier leveling-only
+  test had no yaw, so couldn't test this half of the problem).
+  `estimate_heading_offset()` recovered **21.99°**, accurate to 0.01°.
+- Full pipeline on that drive: mount-aligned double integration gave
+  **209.54 m** final error vs. **254.29 m** on the same drive without
+  mount alignment (raw phone-frame x-axis) — a real ~18% improvement.
+  Logged as the Day 4 row in `results/metrics.md`.
 
-**Caveat on check 2's specific numbers:** the existing
-`data/raw/SYNTH-drive1.csv` in this sandbox (left over from earlier
-day's ad hoc bias-injection testing, not the user's real
-`synthetic_data.py`) has arbitrary gravity values that don't represent
-a physically real phone tilt — it produced a nonsensical "177° roll".
-This is expected and NOT a bug: check 1 (the purpose-built test) is
-what validates correctness; check 2 only confirms the code runs without
-error against real pipeline data shapes. Re-run
-`src/calibration/mount_alignment.py` once the real `synthetic_data.py`
-or actual IO-VNBD data is available to get a meaningful tilt number.
+**Finding investigated rather than just reported:** the ~18%
+improvement is smaller than Day 3's ~20x. Rather than leave that
+unexplained, checked whether leveling or heading were actually
+imprecise — they aren't (leveling verified by applying `R_level`
+directly to the true gravity vector: landed within `1e-16` of
+`[0,0,9.81]`; heading recovered to 0.01°). The remaining ~210 m is
+dominated by plain sensor **noise** compounding through naive double
+integration over 120 s — Day 2's noise-only baseline alone produced
+~42 m from noise with zero injected bias or misalignment. Mount
+alignment can't fix noise-driven drift; that's specifically what
+Phase 4's strapdown INS with periodic ZUPT resets (Days 9–10) is for.
 
-**Explicitly NOT done today (Day 4 part 2):**
-- Heading (yaw) estimation from accelerating-phase correlation with GPS
-- `apply_mount_alignment()` to actually rotate `lin_accel_*_cal` into
-  the vehicle frame
-- Re-running the drift baseline on the mount-aligned signal
-- Logging a Day 4 row to `results/metrics.md`
+**A diagnostic-only bug found and fixed along the way:**
+`recovered_roll_pitch_deg()` reported misleading numbers (~9.3° vs
+true 8.0° roll) once real yaw was present in test data — isolated to
+confirm the actual rotation (`R_level`) was correct and only the
+human-readable Euler-angle readout was ambiguous (the minimal Rodrigues
+rotation isn't the same as a naive "undo roll, then pitch" inverse when
+yaw ≠ 0). This function is never used downstream, so it had zero effect
+on any real result — but the docstring was tightened so it doesn't
+mislead future debugging.
 
-**Next (Day 4 part 2):** heading estimation via horizontal
-linear-acceleration direction during GPS-speed-increasing windows,
-combine with today's `R_level` into a single phone→vehicle rotation,
-apply it, re-run `naive_double_integrate()` on
-`lin_accel_x_mps2_cal_veh`, and log the Day 4 row.
+**A path-resolution bug found and fixed across all 6 script files:**
+running a file from an unexpected location broke on
+`ModuleNotFoundError`, because every script counted a fixed number of
+`.parent` levels to find the project root. Replaced with a function
+that walks upward looking for a folder containing both `src/` and
+`data/`, verified robust to file location and working directory.
+
+**Decisions made:**
+- Heading estimation requires bias-corrected (`_cal`) linear
+  acceleration, not gravity-compensated-only — an uncorrected bias
+  would skew the estimated angle.
+- `estimate_mount_rotation()` combines leveling + heading into a single
+  matrix (`R_align = R_yaw @ R_level`) applied once, rather than two
+  separate rotation steps — simpler downstream and avoids compounding
+  floating-point error across two applications.
+
+**Next (Day 5):** Denoising (the last item in Phase 2's original scope
+— "Mount alignment, bias estimation, denoising, ZUPT classifier").
+Also worth doing given today's finding: since remaining drift is now
+confirmed noise-dominated, a low-pass filter or windowed smoothing on
+`lin_accel_x_mps2_cal_veh` before integration is directly motivated by
+today's diagnosis, not just the original phase checklist.
 
 **Files:**
 ```
@@ -150,7 +158,7 @@ idr-project/
 │   │   ├── gravity_compensation.py
 │   │   ├── zupt_classifier.py
 │   │   ├── bias_estimation.py
-│   │   └── mount_alignment.py      (leveling only — heading pending)
+│   │   └── mount_alignment.py      (leveling + heading, complete)
 │   ├── models/                      (empty — Day 6)
 │   ├── dead_reckoning/
 │   │   └── naive_drift_baseline.py
@@ -163,11 +171,12 @@ idr-project/
 ├── mobile_app/               (empty — Day 15)
 ├── tests/                     (empty)
 └── results/
-    ├── metrics.md              (Day 2 + Day 3 rows; Day 4 pending part 2)
+    ├── metrics.md              (Day 2, 3, 4 rows)
     └── plots/
         ├── day1_imu_sanity_check.png
         ├── day2_eda_imu_distributions.png
         ├── day2_eda_stationary_noise.png
         ├── day2_naive_drift_baseline.png
-        └── day3_calibrated_drift.png
+        ├── day3_calibrated_drift.png
+        └── day4_mount_aligned_drift.png
 ```
