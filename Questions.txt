@@ -1,1 +1,14 @@
 1) Why we used torch instead of tensorflow?
+2) What is your input to the model?
+3) What is your target?
+4) Where does ground truth come from?
+5) Why predict velocity instead of position?
+6) Which ML algorithm are you using?
+7) Why did you choose that algorithm?
+8) What is your loss function?
+9) How do you prevent overfitting?
+10) How do you split train/validation/test?
+11) What metrics will you use?
+12) How will you test generalization?
+13) Can the model run on a smartphone?
+14) What happens when GNSS disappears?

@@ -19,128 +19,133 @@ Trained/evaluated against the IO-VNBD dataset per the problem statement.
 | 6 — GNSS+INS Fusion | 13–14 | UKF/EKF fusion, adaptive noise, seamless GNSS↔DR handoff |
 | 7 — App & Deployment | 15 | Edge engine API, mobile app UI, packaging, final submission |
 
-**Status: Phase 2, Day 4 of 15 complete.**
+**Status: Phase 2 COMPLETE. 5 of 15 days done.**
 
 ---
 
 ## Day 1 — Repo Scaffold + IO-VNBD Loader + Synthetic Data
 
-Full repo scaffold; `src/io_vnbd_loader.py` (`load_smartphone_drive()`,
-`drive_summary()`); `src/utils/synthetic_data.py`. Verified: 1200-sample
-synthetic drive loads correctly at 10 Hz.
+`src/io_vnbd_loader.py`, `src/utils/synthetic_data.py`. Verified: schema
+loads correctly at 10 Hz.
 
 ---
 
 ## Day 2 — EDA + Naive Double-Integration Drift Baseline
 
-`src/eda.py`, `src/dead_reckoning/naive_drift_baseline.py`. Verified:
-41.99 m final error / 21.01 m/min drift on a bias-free synthetic drive,
-logged as the first `results/metrics.md` row.
+`src/eda.py`, `src/dead_reckoning/naive_drift_baseline.py`. Baseline:
+41.99 m final error / 21.01 m/min drift on a bias-free drive.
 
-**Issue found:** GPS-speed-based stationary detection lags the true
-stop instant — carried into Day 3.
+**Issue found:** GPS-speed stationary detection lags the true stop —
+carried into Day 3.
 
 ---
 
 ## Day 3 — Gravity Compensation + IMU-Native ZUPT + Bias Estimation
 
-`src/calibration/gravity_compensation.py`, `zupt_classifier.py`,
-`bias_estimation.py`. Verified on a test drive with known injected
-bias: recovered closely (+0.1675 vs true +0.15 m/s²), drift cut ~20x
-on the same drive (3213.93 m → 149.96 m).
+`gravity_compensation.py`, `zupt_classifier.py`, `bias_estimation.py`.
+Verified: bias recovered closely on a known-injected-bias test, drift
+cut ~20x (3213.93 m → 149.96 m).
 
-**Caveat:** verified against a locally-built stand-in test drive, not
-the user's real `synthetic_data.py` (still not shared).
-
-**Issue found:** `zupt_mask()` default thresholds reach only ~6%
-precision against GPS on the synthetic generator — carried into Day 4/5.
+**Issue found:** `zupt_mask()` thresholds reach only ~6% precision
+against GPS on synthetic data — carried into Day 4/5.
 
 ---
 
 ## Day 4 — Mount Alignment: Leveling + Heading
 
-**Goal:** Express acceleration in the vehicle's frame (forward/lateral/
-up), not the phone's — the phone can be mounted at any orientation.
-Gravity alone can only constrain 2 of 3 rotational degrees of freedom,
-so this is genuinely two sub-problems, done across two sessions so
-neither shipped half-verified.
+`mount_alignment.py` — leveling (roll/pitch from gravity) + heading
+(yaw from GPS-accelerating-phase correlation). Verified: heading
+recovered to 0.01° accuracy on a test with 22° injected yaw. Full
+pipeline: 209.54 m vs. 254.29 m same-drive without mount alignment
+(~18% improvement).
 
-**What was built (part 1 — leveling):**
-- `src/calibration/mount_alignment.py` — `rotation_from_vectors(a, b)`
-  (general Rodrigues shortest-arc rotation), `estimate_leveling_rotation()`
-  (aligns mean stationary gravity to `VEHICLE_UP`), `recovered_roll_pitch_deg()`
-  (diagnostic only).
-- **Sign convention resolved, not assumed:** confirmed Android's
-  `TYPE_GRAVITY` uses the same sign as the accelerometer at rest
-  (≈+9.81 when level) before writing any code — an earlier draft had
-  targeted vehicle-down instead, which would have silently flipped the
-  leveled z-axis.
-- **Verified:** purpose-built known-tilt test (roll +12.0°, pitch
-  −7.0° injected) recovered 11.995°/−7.0006°.
+**Claim needing correction — see Day 5:** Day 4 attributed the
+remaining ~210 m to sensor "noise" and suggested a low-pass filter
+would help. That diagnosis was half right and half wrong — see below.
 
-**What was built (part 2 — heading, completes Day 4):**
-- Extended `mount_alignment.py` with `rotation_about_z()`,
-  `accelerating_mask()` (flags GPS-speed-increasing samples),
-  `estimate_heading_offset()` (angle of mean leveled horizontal linear
-  acceleration during those windows — requires bias-corrected input),
-  `estimate_mount_rotation()` (combines leveling + heading into one
-  phone→vehicle rotation), `apply_mount_alignment()` (produces
-  `lin_accel_{x,y,z}_mps2_cal_veh`).
+---
 
-**Verified:**
-- Built a new test drive with a full 3D mount misalignment injected
-  (roll=8.0°, pitch=−5.0°, **yaw=22.0°** — the earlier leveling-only
-  test had no yaw, so couldn't test this half of the problem).
-  `estimate_heading_offset()` recovered **21.99°**, accurate to 0.01°.
-- Full pipeline on that drive: mount-aligned double integration gave
-  **209.54 m** final error vs. **254.29 m** on the same drive without
-  mount alignment (raw phone-frame x-axis) — a real ~18% improvement.
-  Logged as the Day 4 row in `results/metrics.md`.
+## Day 5 — Denoising (Phase 2 complete)
 
-**Finding investigated rather than just reported:** the ~18%
-improvement is smaller than Day 3's ~20x. Rather than leave that
-unexplained, checked whether leveling or heading were actually
-imprecise — they aren't (leveling verified by applying `R_level`
-directly to the true gravity vector: landed within `1e-16` of
-`[0,0,9.81]`; heading recovered to 0.01°). The remaining ~210 m is
-dominated by plain sensor **noise** compounding through naive double
-integration over 120 s — Day 2's noise-only baseline alone produced
-~42 m from noise with zero injected bias or misalignment. Mount
-alignment can't fix noise-driven drift; that's specifically what
-Phase 4's strapdown INS with periodic ZUPT resets (Days 9–10) is for.
+**Goal:** The last item in Phase 2's original scope. Also a direct
+test of Day 4's claim: if remaining drift really is "noise-driven,"
+low-pass filtering the signal before integration should recover a
+meaningful chunk of it.
 
-**A diagnostic-only bug found and fixed along the way:**
-`recovered_roll_pitch_deg()` reported misleading numbers (~9.3° vs
-true 8.0° roll) once real yaw was present in test data — isolated to
-confirm the actual rotation (`R_level`) was correct and only the
-human-readable Euler-angle readout was ambiguous (the minimal Rodrigues
-rotation isn't the same as a naive "undo roll, then pitch" inverse when
-yaw ≠ 0). This function is never used downstream, so it had zero effect
-on any real result — but the docstring was tightened so it doesn't
-mislead future debugging.
+**What was built:**
+- `src/calibration/denoising.py` —
+  `characterize_frequency_content(signal, sample_rate_hz)`: FFT-based
+  check of where a signal's power actually sits in frequency, so a
+  filter cutoff is chosen from evidence, not assumed.
+  `denoise_lowpass(df, cols, sample_rate_hz=10.0, cutoff_hz=1.0, order=4)`:
+  zero-phase Butterworth low-pass (via `scipy.signal.filtfilt`) — zero
+  phase specifically because an ordinary causal filter's time delay
+  would bias *when* motion is detected, not just remove noise.
 
-**A path-resolution bug found and fixed across all 6 script files:**
-running a file from an unexpected location broke on
-`ModuleNotFoundError`, because every script counted a fixed number of
-`.parent` levels to find the project root. Replaced with a function
-that walks upward looking for a folder containing both `src/` and
-`data/`, verified robust to file location and working directory.
+**Cutoff chosen from evidence:** FFT on the Day 4 test drive's
+`lin_accel_x_mps2_cal_veh` showed 90% of signal power below 0.075 Hz
+and 99% below ~1 Hz — real driving dynamics are low-frequency; a
+1.0 Hz cutoff should remove injected sensor noise (flat across
+0–5 Hz) while keeping the real signal essentially untouched.
+
+**Result — and the honest correction to Day 4's claim:**
+denoising improved the SAME test drive's final error from **209.54 m
+to only 209.13 m — a 0.2% improvement, not a meaningful one.**
+
+This was investigated rather than left as a flat disappointment.
+Confirmed the filter genuinely works (residual removed from the raw
+signal has std ≈0.077, matching the injected noise level almost
+exactly) — but that removed noise barely affects integrated drift.
+**Why:** double-integration drift from noise is driven by its
+low-frequency / near-DC content (it random-walks), not its
+high-frequency content. A low-pass filter with any reasonable cutoff
+passes near-DC noise through essentially unchanged — it only removes
+the high-frequency jitter, which was never the main driver of
+integration drift. This is a known property of inertial navigation,
+not a bug in the filter: **no amount of denoising fixes open-loop
+double-integration drift.** Only a periodic external correction
+(ZUPT velocity resets — Days 9–10, or GNSS fusion — Days 13–14) can
+bound it, because the fundamental problem is that random-walk error
+accumulates over time regardless of how "clean" the signal looks at
+any given instant.
+
+**Revised understanding of Day 4's finding:** "the remaining drift
+after mount alignment is noise-driven, not a mount/bias/gravity
+calibration problem" is still correct. But the implied fix ("a
+low-pass filter... is directly motivated") was wrong — the real fix
+was always Days 9–10's ZUPT-reset strapdown INS, not more signal
+cleanup. Corrected here rather than left standing.
+
+**Where denoising IS still worth keeping (not wasted work):** flat
+signal noise still matters for anything that isn't double integration
+— e.g. Phase 3's velocity-estimation model (Day 6–8) will likely train
+better on a less jittery input, and any future variance-based
+detector (like Day 3's ZUPT classifier) is sensitive to raw noise
+level. `denoise_lowpass()` stays in the pipeline for that reason, just
+not as a drift fix.
+
+**Caveat:** the 1.0 Hz cutoff is specific to this synthetic
+generator's smooth accelerate/cruise/brake/stop cycle timescale
+(~30–40 s per segment). A real drive with rapid stop-and-go traffic or
+frequent potholes could have genuine signal content at higher
+frequencies — re-run `characterize_frequency_content()` against real
+IO-VNBD data before trusting 1.0 Hz there.
 
 **Decisions made:**
-- Heading estimation requires bias-corrected (`_cal`) linear
-  acceleration, not gravity-compensated-only — an uncorrected bias
-  would skew the estimated angle.
-- `estimate_mount_rotation()` combines leveling + heading into a single
-  matrix (`R_align = R_yaw @ R_level`) applied once, rather than two
-  separate rotation steps — simpler downstream and avoids compounding
-  floating-point error across two applications.
+- Kept `denoise_lowpass()` as a general, reusable function (any column
+  list, not hardcoded to the forward axis) since Phase 3 and later
+  strapdown work will likely want it on other channels too.
+- Phase 2 (Days 3–5: mount alignment, bias estimation, denoising, ZUPT
+  classifier) is now functionally complete. All four original scope
+  items exist and are verified.
 
-**Next (Day 5):** Denoising (the last item in Phase 2's original scope
-— "Mount alignment, bias estimation, denoising, ZUPT classifier").
-Also worth doing given today's finding: since remaining drift is now
-confirmed noise-dominated, a low-pass filter or windowed smoothing on
-`lin_accel_x_mps2_cal_veh` before integration is directly motivated by
-today's diagnosis, not just the original phase checklist.
+**Next (Day 6):** Phase 3 begins — AI velocity estimation. This is the
+first phase requiring actual model training (`torch`), which this
+sandbox can't do — architecture and training code will be written
+here, but training itself happens in the user's own environment
+(local or Colab). Also worth carrying forward: Day 5's finding is
+direct evidence for why Day 9–10's ZUPT-reset strapdown INS matters,
+not just an item on the original checklist.
 
 **Files:**
 ```
@@ -158,7 +163,8 @@ idr-project/
 │   │   ├── gravity_compensation.py
 │   │   ├── zupt_classifier.py
 │   │   ├── bias_estimation.py
-│   │   └── mount_alignment.py      (leveling + heading, complete)
+│   │   ├── mount_alignment.py
+│   │   └── denoising.py
 │   ├── models/                      (empty — Day 6)
 │   ├── dead_reckoning/
 │   │   └── naive_drift_baseline.py
@@ -171,12 +177,13 @@ idr-project/
 ├── mobile_app/               (empty — Day 15)
 ├── tests/                     (empty)
 └── results/
-    ├── metrics.md              (Day 2, 3, 4 rows)
+    ├── metrics.md              (Day 2, 3, 4, 5 rows)
     └── plots/
         ├── day1_imu_sanity_check.png
         ├── day2_eda_imu_distributions.png
         ├── day2_eda_stationary_noise.png
         ├── day2_naive_drift_baseline.png
         ├── day3_calibrated_drift.png
-        └── day4_mount_aligned_drift.png
+        ├── day4_mount_aligned_drift.png
+        └── day5_denoised_drift.png
 ```

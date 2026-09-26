@@ -266,3 +266,58 @@ direct rotation-of-gravity check, heading via near-exact recovery of a
 known injected angle. Day 4 row logged to `results/metrics.md`. Mount
 alignment (Phase 2) is functionally complete; remaining drift is
 noise-driven and is Phase 4's problem, not Phase 2's.
+
+### Day 5 — Denoising (Phase 2 complete)
+
+**Concept:**
+The last item in Phase 2's original scope ("mount alignment, bias
+estimation, denoising, ZUPT classifier"). Also framed as a direct test
+of Day 4's claim: if the ~210 m of remaining drift really is
+"noise-driven," a low-pass filter removing that noise before
+integration should recover a meaningful chunk of it. Testing a claim
+instead of just repeating it turned out to matter here.
+
+**Coding tasks / what was built:**
+- `src/calibration/denoising.py` — `characterize_frequency_content()`
+  (FFT-based: where does a signal's power actually sit in frequency,
+  so a filter cutoff is evidence-based, not guessed) and
+  `denoise_lowpass()` (zero-phase Butterworth low-pass via
+  `scipy.signal.filtfilt` — zero-phase specifically because an
+  ordinary causal filter's time delay would bias *when* motion is
+  detected, not just clean up noise level).
+- Cutoff chosen from an FFT on the Day 4 test drive: 90% of signal
+  power sits below 0.075 Hz, 99% below ~1 Hz — real driving dynamics
+  are low-frequency, so 1.0 Hz keeps essentially all real signal while
+  removing noise energy above it.
+
+**Result — and a genuine correction to Day 4, not just a small
+number:** denoising improved the same test drive's final error from
+209.54 m to 209.13 m — a **0.2% improvement**. This was investigated
+rather than shrugged off: confirmed the filter genuinely works (the
+noise it removed from the raw signal has std ≈0.077, matching the
+injected noise level almost exactly) — but that removed noise barely
+touches integrated drift, because **double-integration drift is driven
+by a signal's low-frequency/near-DC content (it random-walks), not its
+high-frequency content.** Any reasonable low-pass filter passes
+near-DC noise through essentially unchanged; it only removes high-
+frequency jitter, which was never the main driver of drift. This is a
+known property of inertial navigation, not a broken filter: **no
+amount of denoising fixes open-loop double-integration drift** — only
+a periodic external correction (ZUPT resets, Days 9–10; or GNSS
+fusion, Days 13–14) can bound it.
+
+**What this means for Day 4's write-up:** the diagnosis ("remaining
+drift is noise-driven, not a calibration problem") still holds. The
+implied *fix* ("a low-pass filter... is directly motivated") was
+wrong, and is corrected here rather than left standing uncorrected.
+
+**Where the work wasn't wasted:** `denoise_lowpass()` stays in the
+pipeline — flat signal noise still matters for things that aren't
+double integration, like Phase 3's upcoming velocity-estimation model
+(cleaner input likely trains better) and any future variance-based
+detector (Day 3's ZUPT classifier is sensitive to raw noise level).
+
+**Status:** Phase 2 (Days 3–5) is now functionally complete — all four
+original scope items (mount alignment, bias estimation, denoising,
+ZUPT classifier) exist and are verified, with one finding corrected
+along the way rather than quietly dropped.
