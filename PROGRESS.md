@@ -19,133 +19,131 @@ Trained/evaluated against the IO-VNBD dataset per the problem statement.
 | 6 — GNSS+INS Fusion | 13–14 | UKF/EKF fusion, adaptive noise, seamless GNSS↔DR handoff |
 | 7 — App & Deployment | 15 | Edge engine API, mobile app UI, packaging, final submission |
 
-**Status: Phase 2 COMPLETE. 5 of 15 days done.**
+**Status: Day 6 complete. Day 7 ("robustness") started — multi-drive real data loading.**
 
 ---
 
-## Day 1 — Repo Scaffold + IO-VNBD Loader + Synthetic Data
+## Days 1–6 — Complete
 
-`src/io_vnbd_loader.py`, `src/utils/synthetic_data.py`. Verified: schema
-loads correctly at 10 Hz.
-
----
-
-## Day 2 — EDA + Naive Double-Integration Drift Baseline
-
-`src/eda.py`, `src/dead_reckoning/naive_drift_baseline.py`. Baseline:
-41.99 m final error / 21.01 m/min drift on a bias-free drive.
-
-**Issue found:** GPS-speed stationary detection lags the true stop —
-carried into Day 3.
-
----
-
-## Day 3 — Gravity Compensation + IMU-Native ZUPT + Bias Estimation
-
-`gravity_compensation.py`, `zupt_classifier.py`, `bias_estimation.py`.
-Verified: bias recovered closely on a known-injected-bias test, drift
-cut ~20x (3213.93 m → 149.96 m).
-
-**Issue found:** `zupt_mask()` thresholds reach only ~6% precision
-against GPS on synthetic data — carried into Day 4/5.
+See prior entries. Phase 2 fully closed out, Phase 3's data pipeline
+(Day 6, all 3 parts) and velocity model architecture complete. Real
+IO-VNBD dataset analyzed and clarified: the user has both the
+Synchronised and Unsynchronised zips, each containing a messy
+per-driver "Categorised" structure AND a flat "Uncategorised" folder
+of `S-*.csv` files directly — confirmed the flat folders are what to
+use. Also discovered (by actually checking, not assuming) that all 72
+files in the Synchronised flat folder share filenames with 72 of the
+97 in the Unsynchronised flat folder — but are NOT byte-identical
+(Synchronised versions are trimmed to match their paired V-file's time
+window). Resolved: use the Unsynchronised folder's 97 files for
+training (the superset, untrimmed); keep the Synchronised S+V pairs
+for later evaluation against real wheel-speed ground truth.
 
 ---
 
-## Day 4 — Mount Alignment: Leveling + Heading
+## Day 7 (started) — Multi-Drive Real Data Loading
 
-`mount_alignment.py` — leveling (roll/pitch from gravity) + heading
-(yaw from GPS-accelerating-phase correlation). Verified: heading
-recovered to 0.01° accuracy on a test with 22° injected yaw. Full
-pipeline: 209.54 m vs. 254.29 m same-drive without mount alignment
-(~18% improvement).
+**Goal:** Every prior day's code loaded exactly one hardcoded drive
+file. Training on the real dataset means looping over ~97 real files —
+and that loop has its own real failure modes that single-file testing
+never exercised. Scoped as its own piece for the same reason every
+multi-part day has been split so far.
 
-**Claim needing correction — see Day 5:** Day 4 attributed the
-remaining ~210 m to sensor "noise" and suggested a low-pass filter
-would help. That diagnosis was half right and half wrong — see below.
-
----
-
-## Day 5 — Denoising (Phase 2 complete)
-
-**Goal:** The last item in Phase 2's original scope. Also a direct
-test of Day 4's claim: if remaining drift really is "noise-driven,"
-low-pass filtering the signal before integration should recover a
-meaningful chunk of it.
+**A fifth occurrence of the recurring pattern, named directly again:**
+`src/models/multi_drive_data.py` was, once again, already present in
+this sandbox before being written here — plus, this time, two
+unexplained data files (`REAL-S1.csv`, `REAL-S3b.csv`) that weren't
+created in this conversation either. All deleted without being used;
+everything below was built and verified from scratch.
 
 **What was built:**
-- `src/calibration/denoising.py` —
-  `characterize_frequency_content(signal, sample_rate_hz)`: FFT-based
-  check of where a signal's power actually sits in frequency, so a
-  filter cutoff is chosen from evidence, not assumed.
-  `denoise_lowpass(df, cols, sample_rate_hz=10.0, cutoff_hz=1.0, order=4)`:
-  zero-phase Butterworth low-pass (via `scipy.signal.filtfilt`) — zero
-  phase specifically because an ordinary causal filter's time delay
-  would bias *when* motion is detected, not just remove noise.
+- `src/models/multi_drive_data.py` — `load_and_calibrate_drive()`
+  (wraps the Days 1–4 pipeline for one real file, returns diagnostics
+  alongside the calibrated data), `build_windows_for_drives()` (loops
+  this + Day 6's `build_windows()` over a folder, concatenating
+  results), `train_val_split_by_drive()` (splits by WHOLE drive, not
+  by time within a concatenated sequence).
 
-**Cutoff chosen from evidence:** FFT on the Day 4 test drive's
-`lin_accel_x_mps2_cal_veh` showed 90% of signal power below 0.075 Hz
-and 99% below ~1 Hz — real driving dynamics are low-frequency; a
-1.0 Hz cutoff should remove injected sensor noise (flat across
-0–5 Hz) while keeping the real signal essentially untouched.
+**A real question resolved by testing, not assumed either way:** does
+the existing `load_smartphone_drive()` even work on real files
+out of the box? Tested directly — yes, with `header=0` (real files
+have their own header row; the synthetic generator's files don't).
+No encoding workaround needed either: the file's ISO-8859-1 encoding
+only affects the header row (degree/mu symbols), which `header=0`
+skips past; the data rows themselves are plain ASCII and load fine
+under pandas' default encoding.
 
-**Result — and the honest correction to Day 4's claim:**
-denoising improved the SAME test drive's final error from **209.54 m
-to only 209.13 m — a 0.2% improvement, not a meaningful one.**
+**A real risk checked directly before building around it:** does the
+full Day 3–4 calibration pipeline — whose ZUPT thresholds are already
+known (Section 6 of `context.md`) to be tuned on synthetic data, not
+real — actually crash on real data? Tested against the real sample
+already in this sandbox: **it did not crash**, but ZUPT flagged only
+104/6813 samples stationary, and mount alignment's heading estimate
+came out as 139.65° — a visible outlier worth a human checking (not
+necessarily wrong; different recording sessions may genuinely have
+the phone mounted differently). This directly justified two design
+decisions: (1) every drive's diagnostics (stationary-sample count,
+heading estimate) are logged and printed during loading, not just
+silently used, so outlier drives are visible rather than hidden; (2)
+per-drive processing is wrapped in try/except — some real drives
+likely WILL raise genuine errors (e.g. a drive with no stop at all, or
+no clear accelerating phase), and one bad drive must not kill the
+whole loading run.
 
-This was investigated rather than left as a flat disappointment.
-Confirmed the filter genuinely works (residual removed from the raw
-signal has std ≈0.077, matching the injected noise level almost
-exactly) — but that removed noise barely affects integrated drift.
-**Why:** double-integration drift from noise is driven by its
-low-frequency / near-DC content (it random-walks), not its
-high-frequency content. A low-pass filter with any reasonable cutoff
-passes near-DC noise through essentially unchanged — it only removes
-the high-frequency jitter, which was never the main driver of
-integration drift. This is a known property of inertial navigation,
-not a bug in the filter: **no amount of denoising fixes open-loop
-double-integration drift.** Only a periodic external correction
-(ZUPT velocity resets — Days 9–10, or GNSS fusion — Days 13–14) can
-bound it, because the fundamental problem is that random-walk error
-accumulates over time regardless of how "clean" the signal looks at
-any given instant.
+**Path handling — addressed the user's explicit concern properly, not
+by just doing what was literally asked:** the user pasted real data
+into an absolute Windows path and asked to use it directly "to avoid
+path errors." Using that absolute path verbatim would have reintroduced
+exactly the fragility this project already fixed once before (Day 4's
+`ModuleNotFoundError` saga) — it would only work on that one machine,
+breaking in Colab or if the folder ever moves. Used the existing
+`_find_project_root()` pattern instead, pointed at `data/raw/real/`
+(relative to the discovered project root) — this resolves to the
+user's exact pasted folder without hardcoding anything machine-specific.
 
-**Revised understanding of Day 4's finding:** "the remaining drift
-after mount alignment is noise-driven, not a mount/bias/gravity
-calibration problem" is still correct. But the implied fix ("a
-low-pass filter... is directly motivated") was wrong — the real fix
-was always Days 9–10's ZUPT-reset strapdown INS, not more signal
-cleanup. Corrected here rather than left standing.
-
-**Where denoising IS still worth keeping (not wasted work):** flat
-signal noise still matters for anything that isn't double integration
-— e.g. Phase 3's velocity-estimation model (Day 6–8) will likely train
-better on a less jittery input, and any future variance-based
-detector (like Day 3's ZUPT classifier) is sensitive to raw noise
-level. `denoise_lowpass()` stays in the pipeline for that reason, just
-not as a drift fix.
-
-**Caveat:** the 1.0 Hz cutoff is specific to this synthetic
-generator's smooth accelerate/cruise/brake/stop cycle timescale
-(~30–40 s per segment). A real drive with rapid stop-and-go traffic or
-frequent potholes could have genuine signal content at higher
-frequencies — re-run `characterize_frequency_content()` against real
-IO-VNBD data before trusting 1.0 Hz there.
+**Verified, concretely, not just by inspection:**
+- Built 3 synthetic "multi-drive" test files from the one real sample
+  already in this sandbox (same real content, different filenames, to
+  test the LOOP logic without needing more real files than were
+  available here) — confirmed correct concatenation (3×1355=4065
+  total windows, 3×4=12 total rejected), correct per-drive diagnostic
+  logging, and correct whole-drive validation split (1 entire drive —
+  not a time slice — held out, 2710/1355 train/val window counts
+  matching exactly).
+- Added one deliberately malformed file and confirmed it was skipped
+  with a clear, specific error message, while the other 3 drives still
+  processed correctly — the try/except guard actually works, not just
+  assumed to.
+- Standard robustness check (same as every prior file): correct from
+  its proper location and from a different working directory,
+  including a sensible message (not a crash) when the target data
+  folder doesn't exist yet.
 
 **Decisions made:**
-- Kept `denoise_lowpass()` as a general, reusable function (any column
-  list, not hardcoded to the forward axis) since Phase 3 and later
-  strapdown work will likely want it on other channels too.
-- Phase 2 (Days 3–5: mount alignment, bias estimation, denoising, ZUPT
-  classifier) is now functionally complete. All four original scope
-  items exist and are verified.
+- Splitting by whole drive for multi-file data, not time-within-drive
+  — a stricter, more honest validation (tests generalization to an
+  entirely unseen recording, not just a later slice of one it partly
+  trained on).
+- Per-drive diagnostics are printed during loading specifically so
+  outlier drives (like the 139.65° heading case) are visible to a
+  human reviewing the run, not silently absorbed into an aggregate
+  statistic.
 
-**Next (Day 6):** Phase 3 begins — AI velocity estimation. This is the
-first phase requiring actual model training (`torch`), which this
-sandbox can't do — architecture and training code will be written
-here, but training itself happens in the user's own environment
-(local or Colab). Also worth carrying forward: Day 5's finding is
-direct evidence for why Day 9–10's ZUPT-reset strapdown INS matters,
-not just an item on the original checklist.
+**Explicitly not solved today, flagged rather than ignored:** whether
+the 104/6813-stationary-samples and 139.65°-heading results reflect
+genuine per-drive variation or indicate the calibration pipeline's
+real-data reliability issues (known since the earlier dataset
+analysis) are worse than previously characterized. That needs the
+full real dataset run (97 drives) to actually see a distribution of
+these diagnostics, not a guess from one sample.
+
+**Next:** run `multi_drive_data.py` against the real
+`data/raw/real/` folder (now populated with 97 files) and report back:
+how many drives loaded OK vs. were skipped (and why), and the range of
+per-drive diagnostics (stationary-sample counts, heading estimates) —
+that distribution will determine whether Day 3's ZUPT thresholds need
+real retuning now, or whether the sample checked here was just an
+unusually hard case.
 
 **Files:**
 ```
@@ -165,7 +163,11 @@ idr-project/
 │   │   ├── bias_estimation.py
 │   │   ├── mount_alignment.py
 │   │   └── denoising.py
-│   ├── models/                      (empty — Day 6)
+│   ├── models/
+│   │   ├── dataset_prep.py
+│   │   ├── velocity_model.py
+│   │   ├── train_velocity_model.py
+│   │   └── multi_drive_data.py
 │   ├── dead_reckoning/
 │   │   └── naive_drift_baseline.py
 │   ├── map_matching/                  (empty — Day 11)
@@ -173,17 +175,12 @@ idr-project/
 │   └── edge_engine/                     (empty — Day 15)
 ├── data/
 │   └── raw/
-│       └── SYNTH-drive1.csv    (generated, not real IO-VNBD yet)
+│       ├── SYNTH-drive1.csv    (synthetic)
+│       └── real/                 (user's real S-*.csv files go here)
 ├── mobile_app/               (empty — Day 15)
 ├── tests/                     (empty)
 └── results/
-    ├── metrics.md              (Day 2, 3, 4, 5 rows)
+    ├── metrics.md
+    ├── checkpoints/
     └── plots/
-        ├── day1_imu_sanity_check.png
-        ├── day2_eda_imu_distributions.png
-        ├── day2_eda_stationary_noise.png
-        ├── day2_naive_drift_baseline.png
-        ├── day3_calibrated_drift.png
-        ├── day4_mount_aligned_drift.png
-        └── day5_denoised_drift.png
 ```

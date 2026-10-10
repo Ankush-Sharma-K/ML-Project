@@ -86,7 +86,7 @@ def load_smartphone_drive(csv_path: str | Path, header: int | None = None) -> pd
     start) for convenience in plotting/windowing later.
     """
     csv_path = Path(csv_path)
-    df = pd.read_csv(csv_path, header=header)
+    df = pd.read_csv(csv_path, header=header, encoding="iso-8859-1")
 
     if df.shape[1] != len(SMARTPHONE_COLUMNS):
         raise ValueError(
@@ -103,7 +103,13 @@ def load_smartphone_drive(csv_path: str | Path, header: int | None = None) -> pd
     # datetime parsing is best-effort — format varies slightly across
     # the dataset's files, so failures are coerced to NaT rather than
     # raising (t_sec is the reliable time axis regardless).
-    df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
+    # Preserve the original timestamp values for later inspection.
+    df["datetime"] = pd.to_datetime(
+    df["datetime"].astype(str).str.replace(
+        r"(\d{2}:\d{2}:\d{2}):(\d{3})$",r"\1.\2",regex=True),format="%Y-%m-%d %H:%M:%S.%f",errors="coerce")
+    print(df["datetime"].head(10))
+    print("Unparseable timestamps:", df["datetime"].isna().sum())
+    
 
     return df
 

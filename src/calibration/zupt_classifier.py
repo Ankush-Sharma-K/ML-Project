@@ -57,6 +57,50 @@ def zupt_mask(
 
     return (accel_var < accel_var_thresh) & (gyro_var < gyro_mag_thresh)
 
+# Paste this function into src/calibration/zupt_classifier.py, directly AFTER the
+# existing zupt_mask() function and BEFORE evaluate_zupt_against_gps().
+# It relies on names that file already defines: np, pd, zupt_mask,
+# _rolling_std_magnitude, LIN_ACCEL_COLS, GYRO_COLS. No other changes needed there.
+
+def zupt_mask_with_fallback(
+    df,
+    accel_var_thresh=0.05,
+    gyro_mag_thresh=0.02,
+    window=5,
+    fallback_speed_thresh_kmh=3.0,
+    fallback_percentile=10.0,
+):
+    """zupt_mask(), plus a GPS-speed-gated fallback for real drives whose
+    noise floor exceeds the fixed threshold. The gate matters: on drives
+    that never stop, the globally lowest-variance samples are just the
+    smoothest MOVING stretch, and treating them as 'at rest' would feed
+    real forward motion into the bias estimate. So the percentile search
+    only runs inside an already-slow window. Returns (mask, diagnostics)."""
+    mask = zupt_mask(df, accel_var_thresh, gyro_mag_thresh, window)
+    if mask.sum() > 0:
+        return mask, {"used_fallback": False, "fallback_possible": None}
+
+    low_speed = (df["gps_speed_kmh"] < fallback_speed_thresh_kmh).to_numpy()
+    if low_speed.sum() == 0:
+        return mask, {"used_fallback": True, "fallback_possible": False}
+
+    accel_var = _rolling_std_magnitude(df, LIN_ACCEL_COLS, window)
+    gyro_mag = np.sqrt(sum(df[c] ** 2 for c in GYRO_COLS)).to_numpy()
+    gyro_var = pd.Series(gyro_mag).rolling(window, center=True, min_periods=1).std().fillna(0).to_numpy()
+    combined = accel_var + gyro_var
+
+    idx = np.where(low_speed)[0]
+    pool = combined[idx]
+    cutoff = np.percentile(pool, fallback_percentile)
+    fb = np.zeros(len(df), dtype=bool)
+    fb[idx[pool <= cutoff]] = True
+    return fb, {
+        "used_fallback": True,
+        "fallback_possible": True,
+        "n_low_speed_samples": int(low_speed.sum()),
+        "n_fallback_flagged": int(fb.sum()),
+    }
+
 
 def evaluate_zupt_against_gps(mask: np.ndarray, df: pd.DataFrame, speed_thresh_kmh: float = 1.0) -> dict:
     """Sanity-check the IMU-only ZUPT mask against GPS speed (independent

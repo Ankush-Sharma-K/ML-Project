@@ -6,3 +6,4 @@ __pycache__/
 results/plots/*.png
 !results/plots/.gitkeep
 *.zip
+*.csv
