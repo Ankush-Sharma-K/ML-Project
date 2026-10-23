@@ -636,3 +636,108 @@ behaves across genuinely different real drives — the user running this
 against the full 97-file dataset will reveal whether the one sample's
 ZUPT/heading concerns are typical (confirming real retuning is needed)
 or unusual (just a hard case). That result shapes what comes next.
+
+---
+
+## Phase 4 — Core Dead Reckoning (Day 8) and the Day 8 audit
+
+### Day 8 — Strapdown INS + the GPS-outage benchmark
+
+**Concept:** A strapdown INS ("inertial navigation system") is the classic,
+non-ML way to dead-reckon: take the car's forward acceleration from the
+calibrated accelerometer, add it up over time to get speed, and add speed up
+to get distance. ZUPT (zero-velocity update) resets speed to zero whenever
+the IMU says the car is standing still, which stops errors from building up
+during stops.
+
+The first version integrated one whole 86-minute drive and reported tens of
+kilometres of error. That number said nothing about a tunnel. The tunnel
+problem is: GPS drops out for 30 s – 2 min, we know the speed at the
+entrance, and we must keep track of distance until GPS returns. So Day 8 is
+evaluated by **simulated GPS outages** at random moving points of real
+drives, against the simplest competitor: **hold the last GPS speed**.
+
+**Coding:** `src/dead_reckoning/strapdown_ins.py` — `StrapdownINS`
+(`integrate(initial_velocity, no_reverse)`), `simulate_outages()`,
+`log_metric()`; run as `python -m src.dead_reckoning.strapdown_ins`.
+
+**Result:** with honest evaluation (below), the INS is clearly worse than
+holding the last speed at every outage length. The phone accelerometers in
+this dataset are too noisy for physics-only integration — the reason Day 9
+uses the learned velocity model instead.
+
+### The Day 8 audit — what was wrong, in short
+
+Re-checking Days 1–8 against all 97 real drives found:
+- **GPS speed is m/s, not km/h** (despite the header) in 94/97 files — every
+  speed, distance and training target had been 3.6x too small.
+- **GPS updates only every ~10 s**, held in between → interpolated speed
+  `gps_speed_interp_ms` added; the old heading estimate (which differenced the
+  held speed) was broken and was replaced by a GPS-interval rotation fit.
+- **ZUPT thresholds were synthetic-tuned** → per-phone adaptive thresholds.
+- Data repairs: S-A4 column shift (old repair off by one), frozen duplicate
+  rows (S-T1/T4/T5/T6), time-counter resets.
+- **The only "trained model" was trained on the synthetic drive** → the model
+  was trained on real data for the first time.
+
+### What calibration is
+
+A phone in a car reports raw numbers in its own coordinate frame, distorted
+by its own flaws. Calibration turns them into the car's acceleration:
+1. **Remove gravity** (phone's gravity sensor; no GPS needed).
+2. **Sensor bias** — average reading while GPS says the car is stopped.
+3. **Mount alignment** — tilt (from gravity at stops) and heading (rotation
+   that best matches the phone's motion to GPS speed changes and turns).
+4. **ZUPT thresholds** — how quiet this phone is at rest vs while driving.
+Steps 2–4 need GPS, so *which* GPS data they may use matters.
+
+### Honest evaluation (audit part 3)
+
+Two ways the benchmark used information a phone would not have in a tunnel:
+- **Calibration used the whole drive's GPS**, including the outage itself.
+  Fixed: each outage is calibrated only on everything recorded **before** it.
+  This made the INS noticeably worse (it had been benefiting); the ML model
+  was almost unaffected (4.59 vs 4.50 m/s per-window error).
+- **The entry speed was the interpolated GPS speed**, which leans towards the
+  next fix — inside the tunnel. Fixed: the **last real GPS fix**. This made
+  "hold last speed" ~15–25% worse than it had looked.
+
+### Better ground truth: the car's wheel speed
+
+The Synchronised zip has, for 72 drives, a `V-*.csv` logged by the car itself
+(wheel speeds, VBOX GPS velocity, speedometer at 10 Hz). The car's signals
+agree with each other to ~0.1 m/s, while our phone-GPS label is ~1 m/s off.
+The files are NOT always in sync with our phone files (offsets up to ±28 s),
+so each drive's offset is estimated from speed and verified against gyro vs
+yaw rate; 39 drives align clearly. Findings: training on wheel-speed labels
+barely helps the model (3.14 → 3.05 m/s), and conclusions from GPS truth
+held — but wheel speed is now the reference wherever it exists.
+
+**Coding:** `src/utils/vehicle_truth.py` (`load_wheel_speed_truth`),
+files in `data/raw/vehicle/V/` and `data/raw/vehicle/S_sync/`.
+
+---
+
+## Day 9 — ML velocity during outages: "anchored ML"
+
+**Concept:** Neither competitor wins everywhere. Holding the last GPS speed
+is good for a few seconds but goes stale; the ML model tracks speed changes
+but has a phone/car-specific bias (e.g. a smooth car reads as "slow"). At the
+tunnel entrance we can *see* that bias — the model's speed vs the last GPS
+fix — so **anchored ML** corrects the model by it and lets the correction
+fade out as the road and speed change:
+
+    speed(t) = ML(t) + (last GPS speed − ML(0)) · e^(−t / 20 s)
+
+The 20 s fade was chosen on validation drives and confirmed by a
+minimum-variance mix computed from error statistics (which cannot overfit a
+few drives): trust moves from the entrance correction to the model within
+~10–20 s, and the derived mix did not beat the simple 20 s fade.
+
+**Coding:** `src/dead_reckoning/ins_with_ml_velocity.py` —
+`ml_speed_series`, `anchored_ml_speed`, `make_ml_methods`; run as
+`python -m src.dead_reckoning.ins_with_ml_velocity` (TEST drives only).
+
+**Result:** see PROGRESS.md / results/metrics.md (Day 9 section). In 5-fold
+cross-validation against wheel truth, anchored ML beat holding the last
+speed at every outage length (47/88/176 m vs 61/141/315 m at 30/60/120 s).

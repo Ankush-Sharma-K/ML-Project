@@ -35,8 +35,8 @@ for later evaluation against real wheel-speed ground truth.**
 |---|---|---|---|
 | 1 — Setup & Dataset Understanding | 1–2 | Repo scaffold, IO-VNBD loader, EDA, naive drift baseline | done |
 | 2 — Calibration & Preprocessing | 3–5 | Mount alignment, bias estimation, denoising, ZUPT classifier | done |
-| 3 — AI Velocity Estimation | 6–8 | IMU→velocity model, robustness, on-device compression | Day 6 done; Day 7 (robustness) started |
-| 4 — Core Dead Reckoning | 9–10 | Strapdown INS integration, drift benchmark evaluation | — |
+| 3 — AI Velocity Estimation | 6–8 | IMU→velocity model, robustness, on-device compression | model trained on 75 real drives (Day 8 audit); on-device compression not done |
+| 4 — Core Dead Reckoning | 9–10 | Strapdown INS integration, drift benchmark evaluation | strapdown INS + outage benchmark done (Day 8 audit) |
 | 5 — Map Matching | 11–12 | OSM road graph, NHC constraints, HMM map matcher | — |
 | 6 — GNSS+INS Fusion | 13–14 | UKF/EKF fusion, adaptive noise, seamless GNSS↔DR handoff | — |
 | 7 — App & Deployment | 15 | Edge engine API, mobile app UI, packaging, final submission | — |
@@ -103,11 +103,83 @@ unchanged from the prior version of this file.)*
   that's confirmation (not just suspicion) that Day 3's ZUPT
   thresholds need real retuning before Phase 3 training is trustworthy.
 
+### Day 8 audit — new / changed entries (all verified on the 97 real drives)
+
+**Column contract change:** after `load_smartphone_drive()`, `gps_speed_kmh`
+is TRUE km/h (the raw files store m/s in 94 of 97 drives despite the
+header). The loader also adds `gps_speed_ms` (held value, m/s) and
+`gps_speed_interp_ms` (interpolated between GPS fixes, m/s — use this as
+the speed reference / training target). `df.attrs` carries
+`speed_unit_in_file`, `n_logger_duplicates_dropped`, `n_time_resets_repaired`.
+
+| File | Name | Signature | Notes |
+|---|---|---|---|
+| `io_vnbd_loader.py` | `detect_speed_unit` | `(df) -> "mps" \| "kmh"` | compares integrated speed with haversine GPS track |
+| `io_vnbd_loader.py` | `gps_track_length_m` | `(df) -> float` | haversine over fix rows |
+| `io_vnbd_loader.py` | `interpolate_gps_speed` | `(df) -> np.ndarray` | linear between fix instants |
+| `zupt_classifier.py` | `calibration_stationary_mask` | `(df, speed_thresh_ms=0.3, min_duration_s=3.0, window=20) -> mask` | GPS-confirmed sustained + quiet stops; used for bias/leveling |
+| `zupt_classifier.py` | `zupt_mask_adaptive` | `(df, reference_mask, moving_mask=None, window=30, k_accel=1.5, k_gyro=2.0, moving_percentile=5.0, min_reference_samples=100) -> (mask, thresholds)` | IMU-only ZUPT scaled to the phone's own noise floor, capped below moving values |
+| `mount_alignment.py` | `estimate_heading_offset_gps` | `(df, R_level, ...) -> {heading_rad, n_intervals, r_forward, r_lateral}` | Procrustes between IMU and GPS velocity change over fix intervals |
+| `mount_alignment.py` | `estimate_mount_rotation` | adds `heading_method="auto"`; returns also `heading_method`, `leveled_on_stationary`, `heading_fit` | empty stationary mask -> level on whole-drive gravity |
+| `multi_drive_data.py` | `load_and_calibrate_drive` | diagnostics add `bias_calibrated`, `heading_method`, `heading_r_forward/lateral`, `speed_unit_in_file`, `calibration_stationary_mask` | non-stopping drives no longer rejected |
+| `multi_drive_data.py` | `build_windows_for_drives` | default `target_col="gps_speed_interp_ms"` | |
+| `multi_drive_data.py` | `train_val_test_split_by_drive` | `(windows, val_fraction=0.15, test_fraction=0.15, seed=42) -> (train, val, test)` | seeded, by whole recording (S-S3a/b/c kept together) |
+| `velocity_model.py` | `FEATURE_COLS_DEFAULT` | gyro channels now `gyro_*_rads_cal` | |
+| `train_velocity_model.py` | `evaluate` | `(..., return_mae=False)` | MAE in m/s alongside Huber loss |
+| `train_velocity_model.py` | `predict` | `(model, windows, norm_stats, device, batch_size) -> np.ndarray` | |
+| `strapdown_ins.py` | `StrapdownINS.integrate` | `(initial_velocity=0.0, no_reverse=False)` | |
+| `strapdown_ins.py` | `simulate_outages` | superseded — see "Day 8 audit part 3" below | |
+
+**Model selection (part 2 of the audit):** `velocity_model.py` adds
+`FEATURE_COLS_BASE` (the 6 original columns), `FEATURE_COLS_DEFAULT` = base +
+`lin_accel_horiz_mag_mps2`, `gyro_mag_rads` (added in `load_and_calibrate_drive`),
+`DEFAULT_WINDOW_SIZE = 200`, `DEFAULT_ARCH = "deep"`, `DEFAULT_ARCH_KWARGS`,
+class `VelocityCNNDeep(n_features, channels)`, `build_model(arch, n_features, **kw)`.
+`train_velocity_model.py` adds `train_velocity_model(..., arch, arch_kwargs, weight_decay)`,
+`load_model(path, device) -> (model, ckpt)`; checkpoints now store `arch`, `arch_kwargs`.
+`multi_drive_data.split_windows_by_names(windows, split)` applies the FIXED split in
+`data/split.json` (always use it; do not re-derive the split).
+
+**Checkpoints:** `results/checkpoints/velocity_cnn_best.pt` = real-data model
+(from `run_training.py`). `velocity_model_synthetic.pt` = the 120 s
+synthetic-drive demo model from `train_velocity_model.py`'s `__main__` —
+this was the only checkpoint before the audit; it was never a real-data model.
+
+### Day 8 audit part 3 + Day 9 — honest outage evaluation, wheel-speed truth, anchored ML
+
+**Rule for every outage evaluation:** use only what the phone has when GPS is
+lost — calibration from the rows BEFORE the outage, entry speed = last real GPS
+fix (`gps_speed_ms`, held), never the interpolated speed at the start (it
+interpolates towards the next fix, inside the outage). Training still uses
+whole-drive calibration (offline, legitimate).
+
+| File | Name | Signature | Notes |
+|---|---|---|---|
+| `multi_drive_data.py` | `load_raw_drive` | `(csv_path) -> df` | loader + gravity compensation, no calibration |
+| `multi_drive_data.py` | `calibrate` | `(df, allow_leveling_only=False) -> {bias, R_align, stationary_mask, heading_offset_deg, heading_method, heading_fit}` | pass `df.iloc[:start]` for before-outage calibration; `heading_method="none"` = leveling only |
+| `multi_drive_data.py` | `apply_calibration` | `(df, calib) -> df` | adds `_cal`, `_cal_veh`, `lin_accel_horiz_mag_mps2`, `gyro_mag_rads` |
+| `multi_drive_data.py` | `load_and_calibrate_drive` | unchanged signature | now = `load_raw_drive` + `calibrate` + `apply_calibration`; verified bit-identical output |
+| `utils/vehicle_truth.py` | `load_wheel_speed_truth` | `(phone_df, drive_name, vehicle_dir) -> (truth or None, info)` | wheel speed (m/s) aligned to phone rows; per-drive lag from speed cross-correlation (±60 s); rejects unclear alignments |
+| `strapdown_ins.py` | `simulate_outages` | `(df_raw, outage_lengths_s=(30,60,120), n_starts=15, truth=None, min_start_speed_ms=3.0, seed=0, history_rows=0, extra_methods=None) -> DataFrame` | per-start calibration before the outage; methods `hold_speed`, `ins`, `ins_zupt` (+ extra) |
+| `strapdown_ins.py` | `summarize_outages`, `load_truth`, `report` | see docstrings | `load_truth` -> (wheel truth or None, "wheel"/"gps") |
+| `strapdown_ins.py` | `log_metric` | `(results_path, label, metrics, day="Day 8", section_title=...)` | one section per day in metrics.md; replaces same-label rows |
+| `ins_with_ml_velocity.py` | `ml_speed_series` | `(model, ckpt, seg, ends, device) -> np.ndarray` | model speed for windows ending at row indices |
+| `ins_with_ml_velocity.py` | `anchored_ml_speed` | `(ml, v0, tau_s, fade_s=20.0)` | `ml + (v0 - ml[0]) * exp(-tau/fade_s)` |
+| `ins_with_ml_velocity.py` | `make_ml_methods` | `(model, ckpt, device, fade_s=20.0)` | `extra_methods` for `simulate_outages`: `ml`, `anchored_ml` |
+
+**Vehicle data:** `data/raw/vehicle/V/V-*.csv` (car's own 10 Hz log: wheel speeds,
+VBOX velocity, speedometer, yaw rate, ...) and `data/raw/vehicle/S_sync/S-*.csv`
+(their row-for-row phone files, which carry the timestamps), from the
+"Uncategorised IOVNB Dataset" folders of the Synchronised zip. 39 drives align
+clearly; S-Y1 and S-S4 do not match at all.
+
+**Run:** `python -m src.dead_reckoning.strapdown_ins` (Day 8, all drives) and
+`python -m src.dead_reckoning.ins_with_ml_velocity` (Day 9, TEST drives).
+
 ### Not yet built (reserve these module paths)
 | Phase | Expected file(s) |
 |---|---|
-| 3 (Days 7–8) | ZUPT threshold retuning (if the full real-data run confirms it's needed), compression/export script |
-| 4 (Days 9–10) | `src/dead_reckoning/strapdown_ins.py` |
+| 3 | compression/export script (on-device model) |
 | 5 (Days 11–12) | `src/map_matching/osm_graph.py`, `src/map_matching/hmm_matcher.py` |
 | 6 (Days 13–14) | `src/fusion/ukf_fusion.py` |
 | 7 (Day 15) | `src/edge_engine/`, `mobile_app/` |
@@ -124,10 +196,18 @@ Unchanged — see prior version.
 
 Unchanged from the prior version, **plus:**
 
-- **ZUPT real-data reliability needs the FULL dataset to properly
-  characterize** — one real sample showed low stationary-sample counts
-  and an outlier heading estimate; is this typical or unusual? Only
-  the full 97-drive run will tell.
+- ~~ZUPT real-data reliability~~ — resolved in the Day 8 audit (adaptive
+  per-phone thresholds, `zupt_mask_adaptive`).
+- **Speed from vibration depends on the phone/car.** Remaining model error
+  (~3.1 m/s vs wheel truth in cross-validation) is dominated by per-drive
+  bias (e.g. S-T7). Better labels (wheel speed) do not fix it (3.14 -> 3.05).
+  Anchored ML removes part of it at the tunnel entrance. Per-phone
+  fine-tuning helped S-T7 a lot but broke S-Vw4 when the adaptation minutes
+  did not cover the later speeds -- not adopted without safeguards.
+- **Gyro axis convention differs between phones** (matches GPS course on
+  S-T2, not on S-S1/S-Vw4) — check before using gyro for direction (Phase 5).
+- **Early outages**: with little driving before the outage the heading
+  often cannot be resolved (leveling only; ~17% of Day 9 test outages).
 - **A FIFTH occurrence of pre-existing, unverified files appearing in
   this sandbox** (`multi_drive_data.py`, plus two unexplained data
   files `REAL-S1.csv`/`REAL-S3b.csv` this time). Same standing

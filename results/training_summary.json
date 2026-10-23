@@ -1,0 +1,337 @@
+{
+  "best_epoch": 6,
+  "epochs_run": 16,
+  "best_val_huber_loss": 2.0431299599191,
+  "train_minutes": 2.4,
+  "train_mean_speed_mps": 17.956182936910004,
+  "n_train_windows": 109893,
+  "train_drives": [
+    "S-A4.csv",
+    "S-A5.csv",
+    "S-A6.csv",
+    "S-A7.csv",
+    "S-S1.csv",
+    "S-S3a.csv",
+    "S-S3b.csv",
+    "S-S3c.csv",
+    "S-S4.csv",
+    "S-T1.csv",
+    "S-T10.csv",
+    "S-T11.csv",
+    "S-T2.csv",
+    "S-T3.csv",
+    "S-T4.csv",
+    "S-T5.csv",
+    "S-T8.csv",
+    "S-T9.csv",
+    "S-Vfa01.csv",
+    "S-Vfa02.csv",
+    "S-Vta12.csv",
+    "S-Vta14.csv",
+    "S-Vta16.csv",
+    "S-Vta17.csv",
+    "S-Vta1a.csv",
+    "S-Vta1b.csv",
+    "S-Vta2.csv",
+    "S-Vta20.csv",
+    "S-Vta22.csv",
+    "S-Vta23.csv",
+    "S-Vta24.csv",
+    "S-Vta25.csv",
+    "S-Vta27.csv",
+    "S-Vta28.csv",
+    "S-Vta3.csv",
+    "S-Vta4.csv",
+    "S-Vta6.csv",
+    "S-Vta7.csv",
+    "S-Vta8.csv",
+    "S-Vtb1.csv",
+    "S-Vtb2.csv",
+    "S-Vtb3.csv",
+    "S-Vtb5.csv",
+    "S-Vw10.csv",
+    "S-Vw11.csv",
+    "S-Vw12.csv",
+    "S-Vw14a.csv",
+    "S-Vw14b.csv",
+    "S-Vw14c.csv",
+    "S-Vw2.csv",
+    "S-Vw6.csv",
+    "S-Vw7.csv",
+    "S-Vw8.csv",
+    "S-Vw9.csv"
+  ],
+  "scores": {
+    "val": {
+      "mae_mps": 2.495302931455071,
+      "rmse_mps": 3.389353678640294,
+      "baseline_mean_speed_mae_mps": 9.21903319927121,
+      "per_drive_mean_mae_mps": 3.1174109567505317,
+      "per_drive_mean_baseline_mae_mps": 8.46642382328659,
+      "per_drive": {
+        "S-M.csv": {
+          "n_windows": 10558,
+          "mae_mps": 2.3136800594433726,
+          "bias_mps": -0.5110301631011708,
+          "baseline_mae_mps": 8.178166221401312
+        },
+        "S-S2.csv": {
+          "n_windows": 9368,
+          "mae_mps": 2.469494894844925,
+          "bias_mps": 0.08793126951615232,
+          "baseline_mae_mps": 10.154289300141636
+        },
+        "S-T6.csv": {
+          "n_windows": 83,
+          "mae_mps": 4.824518099771144,
+          "bias_mps": 1.6977562586644,
+          "baseline_mae_mps": 11.706839901815622
+        },
+        "S-Vta26.csv": {
+          "n_windows": 174,
+          "mae_mps": 1.9688845820420524,
+          "bias_mps": 1.2348720838530682,
+          "baseline_mae_mps": 12.153680404751267
+        },
+        "S-Vta30.csv": {
+          "n_windows": 1694,
+          "mae_mps": 2.2276007870356627,
+          "bias_mps": 0.566028450462771,
+          "baseline_mae_mps": 11.488826976917293
+        },
+        "S-Vta5.csv": {
+          "n_windows": 11,
+          "mae_mps": 0.8607517571730579,
+          "bias_mps": -0.8288584368547077,
+          "baseline_mae_mps": 5.77109229041618
+        },
+        "S-Vw16a.csv": {
+          "n_windows": 568,
+          "mae_mps": 3.2764087682503233,
+          "bias_mps": 0.6058746928222911,
+          "baseline_mae_mps": 5.329027278123125
+        },
+        "S-Vw16b.csv": {
+          "n_windows": 93,
+          "mae_mps": 7.201397112260328,
+          "bias_mps": -6.801161931770167,
+          "baseline_mae_mps": 4.916056794245647
+        },
+        "S-Vw3.csv": {
+          "n_windows": 367,
+          "mae_mps": 3.345497434658047,
+          "bias_mps": -0.5605562298563621,
+          "baseline_mae_mps": 5.508197262912052
+        },
+        "S-Y1.csv": {
+          "n_windows": 7009,
+          "mae_mps": 2.6858760720264065,
+          "bias_mps": 0.28201112562149916,
+          "baseline_mae_mps": 9.458061802141778
+        }
+      },
+      "n_windows": 29925,
+      "drives": [
+        "S-M.csv",
+        "S-S2.csv",
+        "S-T6.csv",
+        "S-Vta26.csv",
+        "S-Vta30.csv",
+        "S-Vta5.csv",
+        "S-Vw16a.csv",
+        "S-Vw16b.csv",
+        "S-Vw3.csv",
+        "S-Y1.csv"
+      ]
+    },
+    "test": {
+      "mae_mps": 4.534107034143267,
+      "rmse_mps": 6.387832744917655,
+      "baseline_mean_speed_mae_mps": 8.053184709741691,
+      "per_drive_mean_mae_mps": 4.709459322968536,
+      "per_drive_mean_baseline_mae_mps": 7.088523387628683,
+      "per_drive": {
+        "S-A8.csv": {
+          "n_windows": 6622,
+          "mae_mps": 2.9113518794856605,
+          "bias_mps": 1.3616537037560654,
+          "baseline_mae_mps": 6.37987539428241
+        },
+        "S-T7.csv": {
+          "n_windows": 10111,
+          "mae_mps": 5.943285523011012,
+          "bias_mps": -5.286527437049726,
+          "baseline_mae_mps": 9.42146272509783
+        },
+        "S-Vta10.csv": {
+          "n_windows": 131,
+          "mae_mps": 8.725949896207126,
+          "bias_mps": -8.273083650190415,
+          "baseline_mae_mps": 7.179043995822761
+        },
+        "S-Vta13.csv": {
+          "n_windows": 21,
+          "mae_mps": 7.692749426858982,
+          "bias_mps": -7.692749426858982,
+          "baseline_mae_mps": 6.942816181140151
+        },
+        "S-Vta21.csv": {
+          "n_windows": 188,
+          "mae_mps": 2.1994042633667563,
+          "bias_mps": -0.22309660187173494,
+          "baseline_mae_mps": 5.39069809208042
+        },
+        "S-Vta29.csv": {
+          "n_windows": 2350,
+          "mae_mps": 2.53765303170134,
+          "bias_mps": -0.9336829428090231,
+          "baseline_mae_mps": 7.632923306430946
+        },
+        "S-Vtb7.csv": {
+          "n_windows": 27,
+          "mae_mps": 3.885386415671517,
+          "bias_mps": -3.885386415671517,
+          "baseline_mae_mps": 0.5833447881364178
+        },
+        "S-Vw4.csv": {
+          "n_windows": 12633,
+          "mae_mps": 4.619979959041065,
+          "bias_mps": -2.756899921696389,
+          "baseline_mae_mps": 7.952199802247968
+        },
+        "S-Vw5.csv": {
+          "n_windows": 82,
+          "mae_mps": 3.8693735113733707,
+          "bias_mps": 3.6523250834318737,
+          "baseline_mae_mps": 12.314346203419246
+        }
+      },
+      "n_windows": 32165,
+      "drives": [
+        "S-A8.csv",
+        "S-T7.csv",
+        "S-Vta10.csv",
+        "S-Vta13.csv",
+        "S-Vta21.csv",
+        "S-Vta29.csv",
+        "S-Vtb7.csv",
+        "S-Vw4.csv",
+        "S-Vw5.csv"
+      ]
+    }
+  },
+  "history": {
+    "train_loss": [
+      3.270472779658909,
+      2.3441301132597285,
+      2.041382651951572,
+      1.8375434640070192,
+      1.7447162357843309,
+      1.6487827332787632,
+      1.5351134242051057,
+      1.4844845290977773,
+      1.421738047471919,
+      1.3933140381484692,
+      1.335681390714816,
+      1.2933757883374266,
+      1.2817431324431452,
+      1.2323042529970065,
+      1.238306760607891,
+      1.1892530761685791
+    ],
+    "val_loss": [
+      2.3523700521504174,
+      2.108097817075183,
+      2.843571023769745,
+      2.180385637287309,
+      2.250556958874963,
+      2.0431299599191,
+      3.02297040657292,
+      2.094731710887294,
+      2.192095953480044,
+      2.524985286733361,
+      2.076877563752626,
+      2.182172727383667,
+      2.0754198174189806,
+      2.287420610278073,
+      2.3359732685033343,
+      2.183532736052447
+    ],
+    "val_mae": [
+      2.808827128653339,
+      2.562613018548977,
+      3.3046213637935984,
+      2.6355754213006475,
+      2.705325174100616,
+      2.4953029240581923,
+      3.4889744003155676,
+      2.547004488353044,
+      2.6478212254268483,
+      2.983169898827472,
+      2.5305992285808925,
+      2.637289365993108,
+      2.5277584698644397,
+      2.7440806402399227,
+      2.791818436676,
+      2.637235332798141
+    ]
+  },
+  "failed_drives": {
+    "S-I.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vta11.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vta15.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vta19.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vta9.csv": "ValueError: No clean windows produced -- check window_size/stride against the drive length, and check whether nearly every window is being rejected by the dt guard (would indicate the time_col itself is unreliable throughout, not just at isolated resets).",
+    "S-Vtb10.csv": "ValueError: No clean windows produced -- check window_size/stride against the drive length, and check whether nearly every window is being rejected by the dt guard (would indicate the time_col itself is unreliable throughout, not just at isolated resets).",
+    "S-Vtb11.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vtb12.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vtb4.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vtb6.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vtb8.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vtb9.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vw1.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vw13.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vw15.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading.",
+    "S-Vw17.csv": "ValueError: No accelerating samples in mask -- cannot estimate heading."
+  },
+  "rate_mismatch_drives": [
+    "S-A1.csv",
+    "S-A10.csv",
+    "S-A11.csv",
+    "S-A12.csv",
+    "S-A13.csv",
+    "S-A2.csv",
+    "S-A3.csv",
+    "S-A9.csv"
+  ],
+  "config": {
+    "window_size": 200,
+    "stride": 10,
+    "batch_size": 256,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "patience": 10,
+    "split_seed": 42,
+    "arch": "deep",
+    "arch_kwargs": {
+      "channels": [
+        64,
+        128,
+        128,
+        256,
+        256
+      ]
+    },
+    "feature_cols": [
+      "lin_accel_x_mps2_cal_veh",
+      "lin_accel_y_mps2_cal_veh",
+      "lin_accel_z_mps2_cal_veh",
+      "gyro_yaw_rads_cal",
+      "gyro_pitch_rads_cal",
+      "gyro_roll_rads_cal",
+      "lin_accel_horiz_mag_mps2",
+      "gyro_mag_rads"
+    ],
+    "target": "gps_speed_interp_ms"
+  }
+}

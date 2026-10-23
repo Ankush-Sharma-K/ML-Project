@@ -1,0 +1,5 @@
+{
+  "description": "Fixed train/val/test split by recording. Created by train_val_test_split_by_drive(seed=42) on 2-s windows; frozen so every model is compared on the same drives. Drives not listed are train.",
+  "val": ["S-M.csv", "S-S2.csv", "S-T6.csv", "S-Vta26.csv", "S-Vta30.csv", "S-Vta5.csv", "S-Vw16a.csv", "S-Vw16b.csv", "S-Vw3.csv", "S-Y1.csv"],
+  "test": ["S-A8.csv", "S-T7.csv", "S-Vta10.csv", "S-Vta13.csv", "S-Vta21.csv", "S-Vta29.csv", "S-Vtb7.csv", "S-Vw4.csv", "S-Vw5.csv"]
+}

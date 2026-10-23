@@ -144,11 +144,29 @@ def accelerating_mask(df: pd.DataFrame, accel_thresh_ms2: float = 0.3) -> np.nda
     vehicle is actively accelerating forward, so (by the non-holonomic
     constraint) horizontal linear acceleration should point along the
     vehicle's forward axis. This is the independent signal that
-    resolves the yaw ambiguity leveling alone can't."""
-    speed_ms = (df["gps_speed_kmh"] / 3.6).to_numpy()
+    resolves the yaw ambiguity leveling alone can't.
+
+    Uses forward finite differences (not np.gradient) to avoid divide-by-
+    zero when consecutive t_sec values are identical -- a real occurrence
+    in some IO-VNBD drives where two samples share the same timestamp.
+
+    Uses the interpolated speed when present: real GPS speed is held for
+    ~10 s between fixes, so differencing the held value gives zero on 9 of
+    10 rows and one spike -- which is how this mask ended up flagging only
+    264 isolated rows on S-S1. Real drives use estimate_heading_offset_gps()
+    instead; this mask remains the fallback and the synthetic-data path.
+    """
+    speed_col = "gps_speed_interp_ms" if "gps_speed_interp_ms" in df.columns else None
+    speed_ms = df[speed_col].to_numpy() if speed_col else (df["gps_speed_kmh"] / 3.6).to_numpy()
     t = df["t_sec"].to_numpy()
-    dv_dt = np.gradient(speed_ms, t)
-    return dv_dt > accel_thresh_ms2
+    dt = np.diff(t)
+    # Guard: if dt is 0 (duplicate timestamps) treat that gap as a tiny
+    # positive value so dv/dt doesn't blow up to inf/NaN.
+    dt_safe = np.where(dt < 1e-9, 1e-9, dt)
+    dv_dt = np.diff(speed_ms) / dt_safe
+    # Forward-difference has one fewer element; pad last value to match length.
+    dv_dt_full = np.append(dv_dt, dv_dt[-1] if len(dv_dt) > 0 else 0.0)
+    return dv_dt_full > accel_thresh_ms2
 
 
 def estimate_heading_offset(
@@ -178,20 +196,117 @@ def estimate_heading_offset(
     return float(np.arctan2(mean_horizontal[1], mean_horizontal[0]))
 
 
+def estimate_heading_offset_gps(
+    df: pd.DataFrame,
+    R_level: np.ndarray,
+    lin_accel_cal_cols: tuple = DEFAULT_LIN_ACCEL_CAL_COLS,
+    min_speed_ms: float = 2.0,
+    min_interval_s: float = 4.0,
+    max_interval_s: float = 20.0,
+) -> dict:
+    """Heading (yaw of the phone in the vehicle) from GPS fix intervals.
+
+    Over each interval between consecutive GPS fixes, the vehicle-frame
+    velocity change is known from GPS alone: along-track = v1 - v0, and
+    lateral (centripetal, +y = left) = -mean_speed * course_change (GPS
+    course is clockwise). Integrating the LEVELED horizontal IMU
+    acceleration over the same interval gives that same change in the
+    phone's frame. The best 2-D rotation between the two sets of vectors
+    (orthogonal Procrustes) is the heading.
+
+    Why not estimate_heading_offset(): it uses only forward acceleration
+    on accelerating_mask() samples. With real ~10 s GPS, that mask was
+    reduced to a few hundred noisy single rows, giving e.g. 116 deg on
+    S-S1 with zero correlation to real acceleration. This version uses
+    every moving interval, turns as well as speed changes, and integrates
+    the IMU instead of sampling it, so noise averages out. Fixes are thinned
+    to >= `min_interval_s` apart first, so 1 Hz-GPS drives (S-A4..A8,
+    S-Vta1a/2) get the same ~4-10 s intervals as the ~0.1 Hz ones -- over
+    1 s the integrated IMU noise swamps the real velocity change (r ~0.1).
+
+    Returns {"heading_rad", "n_intervals", "r_forward", "r_lateral"}. The
+    two r values (correlation of IMU vs GPS velocity change after
+    rotation) are a per-drive quality check: real phone accelerometers in
+    this dataset only reach ~0.1-0.6.
+    """
+    t = df["t_sec"].to_numpy(dtype=float)
+    speed = df["gps_speed_ms"].to_numpy(dtype=float)
+    course = np.radians(df["gps_orientation_deg"].to_numpy(dtype=float))
+    accel_h = (df[list(lin_accel_cal_cols)].to_numpy() @ R_level.T)[:, :2]
+
+    dt = np.diff(t, prepend=t[0])
+    dt[(dt < 0) | (dt > 1.0)] = 0.0
+    cum_dv = np.cumsum(accel_h * dt[:, None], axis=0)
+
+    fix = np.where(np.r_[True, (np.diff(speed) != 0) | (np.diff(course) != 0)])[0]
+    thinned = [fix[0]]
+    for i in fix[1:]:
+        if t[i] - t[thinned[-1]] >= min_interval_s:
+            thinned.append(i)
+    fix = np.array(thinned)
+    i0, i1 = fix[:-1], fix[1:]
+    span = t[i1] - t[i0]
+    ok = ((span >= min_interval_s - 1e-6) & (span < max_interval_s)
+          & (speed[i0] > min_speed_ms) & (speed[i1] > min_speed_ms))
+    if ok.sum() < 10:
+        raise ValueError(f"Only {int(ok.sum())} usable GPS fix intervals -- cannot estimate heading.")
+    i0, i1 = i0[ok], i1[ok]
+
+    dv_phone = cum_dv[i1] - cum_dv[i0]
+    d_course = np.angle(np.exp(1j * (course[i1] - course[i0])))
+    dv_vehicle = np.c_[speed[i1] - speed[i0], -0.5 * (speed[i0] + speed[i1]) * d_course]
+
+    U, _, Vt = np.linalg.svd(dv_phone.T @ dv_vehicle)
+    Q = U @ np.diag([1.0, np.sign(np.linalg.det(U @ Vt))]) @ Vt  # proper rotation, vehicle -> phone
+    rotated = dv_phone @ Q
+    return {
+        "heading_rad": float(np.arctan2(Q[1, 0], Q[0, 0])),
+        "n_intervals": int(ok.sum()),
+        "r_forward": float(np.corrcoef(rotated[:, 0], dv_vehicle[:, 0])[0, 1]),
+        "r_lateral": float(np.corrcoef(rotated[:, 1], dv_vehicle[:, 1])[0, 1]),
+    }
+
+
 def estimate_mount_rotation(
     df: pd.DataFrame,
     stationary_mask: np.ndarray,
     accel_mask: np.ndarray | None = None,
     lin_accel_cal_cols: tuple = DEFAULT_LIN_ACCEL_CAL_COLS,
+    heading_method: str = "auto",
 ) -> dict:
     """Full two-step mount alignment: leveling (part 1) + heading
     (part 2), combined into a single phone-frame -> vehicle-frame
-    rotation. Returns intermediate estimates too, for inspection."""
-    R_level = estimate_leveling_rotation(df, stationary_mask)
+    rotation. Returns intermediate estimates too, for inspection.
 
-    if accel_mask is None:
-        accel_mask = accelerating_mask(df)
-    heading_offset = estimate_heading_offset(df, R_level, accel_mask, lin_accel_cal_cols)
+    Leveling falls back to the mean gravity vector over the WHOLE drive
+    when `stationary_mask` is empty (a drive that never stops): the
+    phone's fused gravity sensor stays accurate while moving, and
+    averaging cancels the short accelerate/brake tilts. This is what lets
+    the non-stopping motorway drives through instead of failing.
+
+    heading_method: "gps_intervals" (estimate_heading_offset_gps),
+    "accelerating" (the original estimate_heading_offset), or "auto" =
+    GPS intervals when the drive has GPS course data and enough moving
+    intervals, otherwise accelerating.
+    """
+    leveling_mask = stationary_mask if stationary_mask.sum() > 0 else np.ones(len(df), dtype=bool)
+    R_level = estimate_leveling_rotation(df, leveling_mask)
+
+    gps_fit = None
+    if heading_method in ("auto", "gps_intervals") and "gps_orientation_deg" in df.columns:
+        try:
+            gps_fit = estimate_heading_offset_gps(df, R_level, lin_accel_cal_cols)
+        except ValueError:
+            if heading_method == "gps_intervals":
+                raise
+    if gps_fit is not None:
+        heading_offset = gps_fit["heading_rad"]
+        method_used = "gps_intervals"
+    else:
+        if accel_mask is None:
+            accel_mask = accelerating_mask(df)
+        heading_offset = estimate_heading_offset(df, R_level, accel_mask, lin_accel_cal_cols)
+        method_used = "accelerating"
 
     R_yaw = rotation_about_z(-heading_offset)
     R_align = R_yaw @ R_level
@@ -201,7 +316,10 @@ def estimate_mount_rotation(
         "heading_offset_rad": heading_offset,
         "heading_offset_deg": float(np.degrees(heading_offset)),
         "R_align": R_align,
-        "n_accelerating_samples": int(accel_mask.sum()),
+        "heading_method": method_used,
+        "leveled_on_stationary": bool(stationary_mask.sum() > 0),
+        "n_accelerating_samples": int(accel_mask.sum()) if accel_mask is not None else 0,
+        "heading_fit": gps_fit,
     }
 
 

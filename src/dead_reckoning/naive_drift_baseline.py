@@ -36,7 +36,8 @@ def naive_double_integrate(df: pd.DataFrame, accel_col: str = "accel_x_mps2") ->
     """
     t = df["t_sec"].to_numpy()
     dt = np.diff(t, prepend=t[0])
-    dt[0] = dt[1] if len(dt) > 1 else 0.0
+    # dt[0] is 0 by construction (t[0]-t[0]) — correct: a zero-length first
+    # step contributes 0 to cumsum, so no special handling needed.
 
     accel = df[accel_col].to_numpy()
 
@@ -51,7 +52,7 @@ def gps_reference_distance(df: pd.DataFrame) -> np.ndarray:
     """Ground-truth distance built from GPS speed."""
     t = df["t_sec"].to_numpy()
     dt = np.diff(t, prepend=t[0])
-    dt[0] = dt[1] if len(dt) > 1 else 0.0
+    # dt[0] is 0 by construction — correct, no special handling needed.
     speed_ms = (df["gps_speed_kmh"] / 3.6).to_numpy()
     return np.cumsum(speed_ms * dt)
 

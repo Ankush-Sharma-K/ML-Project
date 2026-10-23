@@ -1,0 +1,172 @@
+
+======================================================================
+Day 8 — strapdown INS, simulated GPS-outage benchmark
+(calibration from data BEFORE each outage; entry speed = last real GPS fix)
+======================================================================
+  S-A4.csv      15 outages  truth=gps
+  S-A5.csv      15 outages  truth=gps
+  S-A6.csv      15 outages  truth=gps
+  S-A7.csv      15 outages  truth=gps
+  S-A8.csv      15 outages  truth=gps
+  S-M.csv       15 outages  truth=wheel
+  S-S1.csv      15 outages  truth=wheel
+  S-S2.csv      15 outages  truth=wheel
+  S-S3a.csv     15 outages  truth=wheel
+  S-S3b.csv     15 outages  truth=gps
+  S-S3c.csv     15 outages  truth=wheel
+  S-S4.csv      15 outages  truth=gps
+  S-T1.csv      15 outages  truth=gps
+  S-T10.csv     15 outages  truth=gps
+  S-T11.csv     15 outages  truth=gps
+  S-T2.csv      15 outages  truth=gps
+  S-T3.csv      15 outages  truth=gps
+  S-T4.csv      15 outages  truth=gps
+  S-T5.csv      15 outages  truth=gps
+  S-T7.csv      15 outages  truth=gps
+  S-T8.csv      15 outages  truth=gps
+  S-T9.csv      15 outages  truth=gps
+  S-Vfa01.csv   15 outages  truth=gps
+  S-Vfa02.csv   15 outages  truth=gps
+  S-Vta10.csv   15 outages  truth=wheel
+  S-Vta14.csv   15 outages  truth=wheel
+  S-Vta16.csv   15 outages  truth=wheel
+  S-Vta17.csv   15 outages  truth=wheel
+  S-Vta1a.csv   15 outages  truth=wheel
+  S-Vta2.csv    15 outages  truth=wheel
+  S-Vta20.csv   15 outages  truth=gps
+  S-Vta21.csv   15 outages  truth=wheel
+  S-Vta22.csv   15 outages  truth=gps
+  S-Vta26.csv   15 outages  truth=wheel
+  S-Vta27.csv   15 outages  truth=wheel
+  S-Vta28.csv   15 outages  truth=wheel
+  S-Vta29.csv   15 outages  truth=wheel
+  S-Vta30.csv   15 outages  truth=wheel
+  S-Vta4.csv    15 outages  truth=gps
+  S-Vta6.csv    15 outages  truth=wheel
+  S-Vta8.csv    15 outages  truth=wheel
+  S-Vtb1.csv    15 outages  truth=wheel
+  S-Vtb2.csv    15 outages  truth=wheel
+  S-Vtb3.csv    15 outages  truth=wheel
+  S-Vtb5.csv    15 outages  truth=gps
+  S-Vw11.csv    15 outages  truth=wheel
+  S-Vw14a.csv   15 outages  truth=wheel
+  S-Vw14b.csv   15 outages  truth=gps
+  S-Vw14c.csv   15 outages  truth=wheel
+  S-Vw16a.csv   15 outages  truth=wheel
+  S-Vw2.csv     15 outages  truth=wheel
+  S-Vw3.csv     15 outages  truth=wheel
+  S-Vw4.csv     15 outages  truth=wheel
+  S-Vw6.csv     15 outages  truth=gps
+  S-Vw7.csv     15 outages  truth=gps
+  S-Vw8.csv     15 outages  truth=gps
+  S-Y1.csv      15 outages  truth=gps
+
+ALL (57 drives; truth = wheel speed where available, else GPS)
+Method                                    Outage  Median err (m)  Median %  Mean err (m)      N
+-----------------------------------------------------------------------------------------------
+Hold last GPS fix (baseline)                 30s            56.4     13.3%          85.5    855
+Strapdown INS, no ZUPT                       30s           104.3     25.3%         136.6    855
+Strapdown INS + adaptive ZUPT                30s           106.5     26.6%         143.8    855
+
+Hold last GPS fix (baseline)                 60s           151.1     17.7%         206.6    855
+Strapdown INS, no ZUPT                       60s           285.7     37.5%         420.0    855
+Strapdown INS + adaptive ZUPT                60s           285.7     40.2%         433.2    855
+
+Hold last GPS fix (baseline)                120s           314.0     20.1%         444.2    855
+Strapdown INS, no ZUPT                      120s           767.1     48.4%        1246.1    855
+Strapdown INS + adaptive ZUPT               120s           783.5     49.7%        1257.6    855
+
+
+WHEEL-SPEED TRUTH ONLY
+Method                                    Outage  Median err (m)  Median %  Mean err (m)      N
+-----------------------------------------------------------------------------------------------
+Hold last GPS fix (baseline)                 30s            62.7     15.8%          97.5    435
+Strapdown INS, no ZUPT                       30s           119.0     32.4%         144.1    435
+Strapdown INS + adaptive ZUPT                30s           114.3     31.8%         141.2    435
+
+Hold last GPS fix (baseline)                 60s           184.5     24.4%         236.7    435
+Strapdown INS, no ZUPT                       60s           327.6     49.4%         401.8    435
+Strapdown INS + adaptive ZUPT                60s           318.6     47.9%         391.8    435
+
+Hold last GPS fix (baseline)                120s           399.1     24.7%         494.1    435
+Strapdown INS, no ZUPT                      120s           892.1     60.7%        1071.1    435
+Strapdown INS + adaptive ZUPT               120s           867.5     59.2%        1040.1    435
+
+
+OUTAGES WITH < 20 MIN OF DRIVING BEFORE THEM
+Method                                    Outage  Median err (m)  Median %  Mean err (m)      N
+-----------------------------------------------------------------------------------------------
+Hold last GPS fix (baseline)                 30s            64.1     16.4%          94.2    548
+Strapdown INS, no ZUPT                       30s           118.0     33.3%         156.1    548
+Strapdown INS + adaptive ZUPT                30s           117.8     33.9%         156.3    548
+
+Hold last GPS fix (baseline)                 60s           176.5     21.7%         225.2    548
+Strapdown INS, no ZUPT                       60s           335.0     50.5%         488.2    548
+Strapdown INS + adaptive ZUPT                60s           332.2     51.4%         483.0    548
+
+Hold last GPS fix (baseline)                120s           375.1     23.6%         476.7    548
+Strapdown INS, no ZUPT                      120s           871.3     58.5%        1476.3    548
+Strapdown INS + adaptive ZUPT               120s           853.2     58.9%        1445.2    548
+
+
+OUTAGES WITH >= 20 MIN OF DRIVING BEFORE THEM
+Method                                    Outage  Median err (m)  Median %  Mean err (m)      N
+-----------------------------------------------------------------------------------------------
+Hold last GPS fix (baseline)                 30s            43.3      8.4%          70.1    307
+Strapdown INS, no ZUPT                       30s            72.2     14.3%         101.8    307
+Strapdown INS + adaptive ZUPT                30s            85.1     16.9%         121.7    307
+
+Hold last GPS fix (baseline)                 60s           114.1     10.3%         173.4    307
+Strapdown INS, no ZUPT                       60s           183.1     22.6%         298.3    307
+Strapdown INS + adaptive ZUPT                60s           212.9     24.4%         344.5    307
+
+Hold last GPS fix (baseline)                120s           244.9     12.1%         386.2    307
+Strapdown INS, no ZUPT                      120s           503.1     30.3%         835.0    307
+Strapdown INS + adaptive ZUPT               120s           570.5     35.5%         922.7    307
+
+Heading could not be resolved before the outage (leveling only): 12.0% of outages
+
+Skipped drives:
+  S-A1.csv: sample rate not ~10 Hz
+  S-A10.csv: sample rate not ~10 Hz
+  S-A11.csv: sample rate not ~10 Hz
+  S-A12.csv: sample rate not ~10 Hz
+  S-A13.csv: sample rate not ~10 Hz
+  S-A2.csv: sample rate not ~10 Hz
+  S-A3.csv: sample rate not ~10 Hz
+  S-A9.csv: sample rate not ~10 Hz
+  S-I.csv: too short / no moving start point
+  S-T6.csv: too short / no moving start point
+  S-Vta11.csv: too short / no moving start point
+  S-Vta12.csv: too short / no moving start point
+  S-Vta13.csv: too short / no moving start point
+  S-Vta15.csv: too short / no moving start point
+  S-Vta19.csv: too short / no moving start point
+  S-Vta1b.csv: too short / no moving start point
+  S-Vta23.csv: too short / no moving start point
+  S-Vta24.csv: too short / no moving start point
+  S-Vta25.csv: too short / no moving start point
+  S-Vta3.csv: too short / no moving start point
+  S-Vta5.csv: too short / no moving start point
+  S-Vta7.csv: too short / no moving start point
+  S-Vta9.csv: too short / no moving start point
+  S-Vtb10.csv: too short / no moving start point
+  S-Vtb11.csv: too short / no moving start point
+  S-Vtb12.csv: too short / no moving start point
+  S-Vtb4.csv: too short / no moving start point
+  S-Vtb6.csv: too short / no moving start point
+  S-Vtb7.csv: too short / no moving start point
+  S-Vtb8.csv: too short / no moving start point
+  S-Vtb9.csv: too short / no moving start point
+  S-Vw1.csv: too short / no moving start point
+  S-Vw10.csv: too short / no moving start point
+  S-Vw12.csv: too short / no moving start point
+  S-Vw13.csv: too short / no moving start point
+  S-Vw15.csv: too short / no moving start point
+  S-Vw16b.csv: too short / no moving start point
+  S-Vw17.csv: too short / no moving start point
+  S-Vw5.csv: too short / no moving start point
+  S-Vw9.csv: too short / no moving start point
+
+Per-outage results: D:\M.Tech\1st Sem\Machine Learning\ML Project\idr-project\results\day8_outage_benchmark.csv
+Summary rows written to results/metrics.md (re-running replaces them).

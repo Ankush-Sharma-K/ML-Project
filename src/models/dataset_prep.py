@@ -99,7 +99,7 @@ def build_windows(
     if stride < 1:
         raise ValueError("stride must be at least 1.")
 
-    features = df[feature_cols].to_numpy(dtype=float)
+    features = df[feature_cols].to_numpy(dtype=np.float32)  # float32: 20 s windows are large
     target = df[target_col].to_numpy(dtype=float)
     t = df[time_col].to_numpy(dtype=float)
     n = len(df)

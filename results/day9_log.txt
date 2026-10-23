@@ -1,0 +1,105 @@
+
+======================================================================
+Day 9 — anchored ML velocity, simulated GPS outages on TEST drives
+(model never trained on these; calibration from data before each outage;
+ entry speed = last real GPS fix; device cuda)
+======================================================================
+  S-A8.csv      40 outages  truth=gps
+  S-T7.csv      40 outages  truth=gps
+  S-Vta10.csv   40 outages  truth=wheel
+  S-Vta13.csv  skipped (too short for a 120 s outage + 20 s window)
+  S-Vta21.csv   40 outages  truth=wheel
+  S-Vta29.csv   40 outages  truth=wheel
+  S-Vtb7.csv   skipped (too short for a 120 s outage + 20 s window)
+  S-Vw4.csv     40 outages  truth=wheel
+  S-Vw5.csv    skipped (too short for a 120 s outage + 20 s window)
+
+ALL (6 drives; truth = wheel speed where available, else GPS)
+Method                                    Outage  Median err (m)  Median %  Mean err (m)      N
+-----------------------------------------------------------------------------------------------
+Hold last GPS fix (baseline)                 30s            74.3      9.3%          86.0    240
+Strapdown INS + adaptive ZUPT                30s           107.2     18.4%         122.4    240
+ML velocity model                            30s            86.7     19.6%         167.4    240
+Anchored ML (entry correction, 20 s fade)     30s            74.2     13.9%         104.2    240
+
+Hold last GPS fix (baseline)                 60s           165.5     13.8%         179.0    240
+Strapdown INS + adaptive ZUPT                60s           205.5     15.0%         309.6    240
+ML velocity model                            60s           135.5     15.1%         273.9    240
+Anchored ML (entry correction, 20 s fade)     60s           112.5     10.8%         200.6    240
+
+Hold last GPS fix (baseline)                120s           360.6     17.8%         432.4    240
+Strapdown INS + adaptive ZUPT               120s           636.4     29.2%         906.3    240
+ML velocity model                           120s           221.4     12.3%         429.1    240
+Anchored ML (entry correction, 20 s fade)    120s           206.1     12.0%         348.6    240
+
+
+WHEEL-SPEED TRUTH ONLY
+Method                                    Outage  Median err (m)  Median %  Mean err (m)      N
+-----------------------------------------------------------------------------------------------
+Hold last GPS fix (baseline)                 30s            80.2     14.7%         104.0    160
+Strapdown INS + adaptive ZUPT                30s           143.0     27.2%         154.0    160
+ML velocity model                            30s            89.4     25.0%         189.6    160
+Anchored ML (entry correction, 20 s fade)     30s            83.1     20.4%         119.1    160
+
+Hold last GPS fix (baseline)                 60s           217.0     17.1%         210.6    160
+Strapdown INS + adaptive ZUPT                60s           245.0     34.2%         389.3    160
+ML velocity model                            60s           148.0     20.0%         320.0    160
+Anchored ML (entry correction, 20 s fade)     60s           131.1     18.1%         232.7    160
+
+Hold last GPS fix (baseline)                120s           466.7     28.8%         534.4    160
+Strapdown INS + adaptive ZUPT               120s           723.7     53.1%        1126.4    160
+ML velocity model                           120s           243.9     18.3%         481.8    160
+Anchored ML (entry correction, 20 s fade)    120s           226.3     16.6%         391.9    160
+
+
+OUTAGES WITH < 20 MIN OF DRIVING BEFORE THEM
+Method                                    Outage  Median err (m)  Median %  Mean err (m)      N
+-----------------------------------------------------------------------------------------------
+Hold last GPS fix (baseline)                 30s            79.9      9.4%          94.8    112
+Strapdown INS + adaptive ZUPT                30s           134.1     19.5%         130.2    112
+ML velocity model                            30s            83.2     28.7%         219.8    112
+Anchored ML (entry correction, 20 s fade)     30s            84.2     23.3%         130.3    112
+
+Hold last GPS fix (baseline)                 60s           216.1     14.8%         176.6    112
+Strapdown INS + adaptive ZUPT                60s           212.3     15.3%         300.7    112
+ML velocity model                            60s           123.5     18.8%         354.1    112
+Anchored ML (entry correction, 20 s fade)     60s           136.2     18.9%         250.9    112
+
+Hold last GPS fix (baseline)                120s           428.9     28.9%         501.4    112
+Strapdown INS + adaptive ZUPT               120s           632.8     27.8%         767.5    112
+ML velocity model                           120s           174.5     14.0%         482.0    112
+Anchored ML (entry correction, 20 s fade)    120s           201.2     17.9%         384.0    112
+
+
+OUTAGES WITH >= 20 MIN OF DRIVING BEFORE THEM
+Method                                    Outage  Median err (m)  Median %  Mean err (m)      N
+-----------------------------------------------------------------------------------------------
+Hold last GPS fix (baseline)                 30s            51.1      6.9%          78.3    128
+Strapdown INS + adaptive ZUPT                30s            78.5     12.7%         115.5    128
+ML velocity model                            30s            93.4     17.1%         121.7    128
+Anchored ML (entry correction, 20 s fade)     30s            57.5     11.1%          81.4    128
+
+Hold last GPS fix (baseline)                 60s           106.5      8.5%         181.0    128
+Strapdown INS + adaptive ZUPT                60s           176.1     14.7%         317.4    128
+ML velocity model                            60s           149.8     13.0%         203.7    128
+Anchored ML (entry correction, 20 s fade)     60s            93.6      8.0%         156.5    128
+
+Hold last GPS fix (baseline)                120s           230.8      9.7%         372.1    128
+Strapdown INS + adaptive ZUPT               120s           656.9     29.2%        1027.7    128
+ML velocity model                           120s           268.2     12.1%         382.8    128
+Anchored ML (entry correction, 20 s fade)    120s           208.8      9.3%         317.7    128
+
+Heading could not be resolved before the outage (leveling only): 16.7% of outages
+
+Per drive, 120 s outages (median abs error, m):
+method       hold_speed  ins_zupt      ml  anchored_ml
+drive                                                 
+S-A8.csv          170.7     271.4    87.3         69.8
+S-T7.csv          119.5     457.5   453.0        348.3
+S-Vta10.csv       845.3     583.3  1092.1        804.5
+S-Vta21.csv       354.0    1179.6    56.1        105.0
+S-Vta29.csv       428.1     681.6   192.9        166.4
+S-Vw4.csv         384.7    1217.0   339.1        303.4
+
+Per-outage results: D:\M.Tech\1st Sem\Machine Learning\ML Project\idr-project\results\day9_outage_benchmark.csv
+Summary rows written to results/metrics.md (re-running replaces them).

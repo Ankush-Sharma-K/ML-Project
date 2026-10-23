@@ -98,57 +98,113 @@ def detect_nominal_dt_s(t_sec: np.ndarray) -> float:
     return float(np.median(valid))
 
 
-def load_and_calibrate_drive(csv_path: str | Path) -> tuple[pd.DataFrame, dict]:
-    """Run one real drive through the full Days 1-4 pipeline: load ->
-    gravity compensation -> ZUPT -> bias correction -> mount alignment.
-    Adds `gps_speed_ms`. Returns (calibrated_df, diagnostics) so callers
-    can log/inspect per-drive quality without re-deriving it.
+def calibrate(df: pd.DataFrame, allow_leveling_only: bool = False) -> dict:
+    """Estimate a drive's calibration from `df` (loaded + gravity-compensated):
+    calibration stops -> constant bias -> mount rotation (leveling + heading).
 
-    Real files need `header=0` (they have their own header row, unlike
-    the synthetic generator's raw-no-header output) -- confirmed
-    against a real sample before writing this, not assumed.
+    Pass only the rows the phone would actually have when it needs the
+    calibration -- e.g. everything BEFORE a GPS outage (`df.iloc[:start]`).
+    The whole-drive calibration used for training is just `calibrate(df)`.
+
+    Calibration stops come from `calibration_stationary_mask` (GPS-confirmed,
+    sustained, quiet) rather than the synthetic-tuned IMU ZUPT, which found
+    only 2% of S-S1 stationary. A drive that never stops is NOT rejected
+    any more (it was: 29 drives): bias correction is skipped (zero bias)
+    and leveling uses the mean gravity -- see `estimate_mount_rotation`.
+
+    allow_leveling_only: if the heading cannot be resolved (typically very
+    little driving before an early outage), fall back to leveling only
+    (heading 0, `heading_method="none"`) instead of raising.
+
+    Returns {"bias", "R_align", "stationary_mask", "heading_offset_deg",
+    "heading_method", "heading_fit"}; apply it with `apply_calibration`.
     """
+    from src.calibration.zupt_classifier import calibration_stationary_mask
+    from src.calibration.bias_estimation import BIAS_COLS, estimate_constant_bias, apply_bias_correction
+    from src.calibration.mount_alignment import estimate_mount_rotation, estimate_leveling_rotation
+
+    mask = calibration_stationary_mask(df)
+    if mask.sum() > 0:
+        bias = estimate_constant_bias(df, mask)
+    else:
+        bias = {c: 0.0 for c in BIAS_COLS}
+    df_cal = apply_bias_correction(df, bias)
+
+    try:
+        mount = estimate_mount_rotation(df_cal, mask)
+    except ValueError:
+        if not allow_leveling_only:
+            raise
+        leveling_mask = mask if mask.sum() > 0 else np.ones(len(df), dtype=bool)
+        mount = {"R_align": estimate_leveling_rotation(df_cal, leveling_mask),
+                 "heading_offset_deg": 0.0, "heading_method": "none", "heading_fit": None}
+
+    return {
+        "bias": bias,
+        "R_align": mount["R_align"],
+        "stationary_mask": mask,
+        "heading_offset_deg": mount["heading_offset_deg"],
+        "heading_method": mount["heading_method"],
+        "heading_fit": mount["heading_fit"],
+    }
+
+
+def apply_calibration(df: pd.DataFrame, calib: dict) -> pd.DataFrame:
+    """Apply a `calibrate()` result to any rows of the same drive: adds the
+    `_cal` / `_cal_veh` columns and the two magnitude features."""
+    from src.calibration.bias_estimation import apply_bias_correction
+    from src.calibration.mount_alignment import apply_mount_alignment
+
+    out = apply_bias_correction(df, calib["bias"])
+    out = apply_mount_alignment(out, calib["R_align"])
+    out["lin_accel_horiz_mag_mps2"] = np.hypot(out["lin_accel_x_mps2_cal_veh"], out["lin_accel_y_mps2_cal_veh"])
+    out["gyro_mag_rads"] = np.sqrt(
+        out["gyro_yaw_rads_cal"] ** 2 + out["gyro_pitch_rads_cal"] ** 2 + out["gyro_roll_rads_cal"] ** 2
+    )
+    return out
+
+
+def load_raw_drive(csv_path: str | Path) -> pd.DataFrame:
+    """Load one real drive and remove gravity -- everything before calibration.
+    Real files need `header=0` (they have their own header row, unlike the
+    synthetic generator's raw-no-header output)."""
     from src.io_vnbd_loader import load_smartphone_drive
     from src.calibration.gravity_compensation import compute_linear_acceleration
-    from src.calibration.zupt_classifier import zupt_mask_with_fallback
-    from src.calibration.bias_estimation import estimate_constant_bias, apply_bias_correction
-    from src.calibration.mount_alignment import estimate_mount_rotation, apply_mount_alignment
 
-    df = load_smartphone_drive(csv_path, header=0)
-    df = compute_linear_acceleration(df)
-    mask, zupt_diag = zupt_mask_with_fallback(df)
+    return compute_linear_acceleration(load_smartphone_drive(csv_path, header=0))
+
+
+def load_and_calibrate_drive(csv_path: str | Path) -> tuple[pd.DataFrame, dict]:
+    """Run one real drive through the full Days 1-4 pipeline with WHOLE-DRIVE
+    calibration (what training uses): load -> gravity compensation ->
+    `calibrate` -> `apply_calibration`. The loader already provides true-unit
+    `gps_speed_ms` and `gps_speed_interp_ms`. Returns (calibrated_df,
+    diagnostics) so callers can log/inspect per-drive quality.
+
+    For evaluating a GPS outage, do NOT use this: calibrate on the rows
+    before the outage only (see strapdown_ins.simulate_outages).
+    """
+    df = load_raw_drive(csv_path)
+    calib = calibrate(df)  # raises only if heading can't be resolved at all
+    df = apply_calibration(df, calib)
+    mask = calib["stationary_mask"]
     n_stationary = int(mask.sum())
-    if n_stationary == 0:
-        # The GPS-speed-gated fallback already tried everything reasonable:
-        # GPS speed never drops low enough anywhere in this drive for ANY
-        # stationary-based calibration (bias estimation AND leveling both
-        # need this mask). Not fixable by a threshold tweak, so fail with
-        # a specific reason rather than the old generic message.
-        raise ValueError(
-            "No stationary-ish samples found even with the GPS-speed-gated "
-            "fallback -- GPS speed never drops low enough anywhere in this "
-            "recording for bias/leveling calibration (structural, not a "
-            "threshold-tuning issue)."
-        )
-
-    bias = estimate_constant_bias(df, mask)
-    df = apply_bias_correction(df, bias)
-
-    mount = estimate_mount_rotation(df, mask)  # raises if no accelerating phase found
-    df = apply_mount_alignment(df, mount["R_align"])
-
-    df["gps_speed_ms"] = df["gps_speed_kmh"] / 3.6
 
     nominal_dt_s = detect_nominal_dt_s(df["t_sec"].to_numpy())
+    fit = calib["heading_fit"] or {}
 
     diagnostics = {
         "n_samples": len(df),
         "n_stationary": n_stationary,
         "pct_stationary": round(100 * n_stationary / len(df), 1),
-        "heading_offset_deg": round(mount["heading_offset_deg"], 2),
-        "n_accelerating_samples": mount["n_accelerating_samples"],
+        "bias_calibrated": n_stationary > 0,
+        "heading_offset_deg": round(calib["heading_offset_deg"], 2),
+        "heading_method": calib["heading_method"],
+        "heading_r_forward": round(fit.get("r_forward", float("nan")), 3),
+        "heading_r_lateral": round(fit.get("r_lateral", float("nan")), 3),
         "nominal_dt_s": round(nominal_dt_s, 4),
-        "used_zupt_fallback": zupt_diag["used_fallback"],
+        "speed_unit_in_file": df.attrs.get("speed_unit_in_file"),
+        "calibration_stationary_mask": mask,
     }
     return df, diagnostics
 
@@ -156,7 +212,7 @@ def load_and_calibrate_drive(csv_path: str | Path) -> tuple[pd.DataFrame, dict]:
 def build_windows_for_drives(
     csv_paths: list[str | Path],
     feature_cols: list[str],
-    target_col: str = "gps_speed_ms",
+    target_col: str = "gps_speed_interp_ms",
     window_size: int = 20,
     stride: int = 5,
     expected_dt_s: float = 0.1,
@@ -219,6 +275,7 @@ def build_windows_for_drives(
             print(f"  SKIPPED {csv_path.name}: {type(e).__name__}: {e}")
             continue
 
+        diagnostics.pop("calibration_stationary_mask", None)
         diagnostics["n_windows"] = len(windows["y"])
         diagnostics["n_rejected"] = windows["n_rejected"]
         per_drive_diagnostics[str(csv_path)] = diagnostics
@@ -230,8 +287,9 @@ def build_windows_for_drives(
         drive_id_parts.append(np.full(len(windows["y"]), drive_idx, dtype=int))
 
         print(f"  OK {csv_path.name}: {len(windows['y'])} windows "
-              f"({diagnostics['n_stationary']} stationary samples, "
-              f"heading={diagnostics['heading_offset_deg']} deg)")
+              f"({diagnostics['n_stationary']} calibration-stop samples, "
+              f"heading={diagnostics['heading_offset_deg']} deg via "
+              f"{diagnostics['heading_method']}, fit r_fwd={diagnostics['heading_r_forward']})")
 
     if not X_parts:
         raise ValueError(
@@ -289,6 +347,86 @@ def train_val_split_by_drive(windows: dict, val_fraction: float = 0.2) -> tuple[
     return train, val
 
 
+def split_windows_by_names(windows: dict, split: dict) -> tuple[dict, dict, dict]:
+    """(train, val, test) from a FIXED split: `split` = {"val": [file names],
+    "test": [file names]}; every other drive is train. Use this (with the
+    split saved in data/split.json) rather than re-deriving the split each
+    run -- train_val_test_split_by_drive balances by window count, so a
+    different window size silently moves drives between splits."""
+    names = [Path(p).name for p in windows["drive_paths"]]
+
+    def _subset(keep):
+        ids = [i for i, n in enumerate(names) if keep(n)]
+        mask = np.isin(windows["drive_id"], ids)
+        present = sorted(set(windows["drive_id"][mask].tolist()))
+        return {
+            "X": windows["X"][mask], "y": windows["y"][mask],
+            "start_idx": windows["start_idx"][mask], "drive_id": windows["drive_id"][mask],
+            "drive_paths": [windows["drive_paths"][i] for i in present],
+        }
+
+    val, test = set(split["val"]), set(split["test"])
+    return (_subset(lambda n: n not in val and n not in test),
+            _subset(lambda n: n in val), _subset(lambda n: n in test))
+
+
+def _recording_group(path: str) -> str:
+    """Drives cut from the same recording share a group: S-S3a/b/c -> S-S3,
+    S-Vw14a/b/c -> S-Vw14, S-Vta1a/b -> S-Vta1."""
+    stem = Path(path).stem
+    return stem[:-1] if stem[-1].isalpha() and stem[-2].isdigit() else stem
+
+
+def train_val_test_split_by_drive(
+    windows: dict,
+    val_fraction: float = 0.15,
+    test_fraction: float = 0.15,
+    seed: int = 42,
+) -> tuple[dict, dict, dict]:
+    """Three-way split by WHOLE RECORDING, shuffled with a fixed seed.
+
+    Replaces `train_val_split_by_drive` for real training. That function
+    takes the last 20% of drives in filename order, which put ONLY S-Vw*
+    and S-Y1 drives in validation and left no test set at all. Here:
+    recordings are shuffled reproducibly (seed), segments of one recording
+    (S-S3a/b/c ...) never straddle two splits, and recordings are assigned
+    greedily so each split gets roughly its share of WINDOWS (not just of
+    drives -- drive lengths range from 15 s to 3.5 h).
+    """
+    rng = np.random.default_rng(seed)
+    drive_ids = np.unique(windows["drive_id"])
+    groups: dict[str, list[int]] = {}
+    for d in drive_ids:
+        groups.setdefault(_recording_group(windows["drive_paths"][d]), []).append(int(d))
+    names = sorted(groups)
+    rng.shuffle(names)
+
+    counts = {g: int(np.isin(windows["drive_id"], groups[g]).sum()) for g in names}
+    total = sum(counts.values())
+    targets = {"test": test_fraction * total, "val": val_fraction * total}
+    assigned = {"test": [], "val": [], "train": []}
+    filled = {"test": 0, "val": 0}
+    for g in names:
+        for split in ("test", "val"):
+            if filled[split] < targets[split]:
+                assigned[split].append(g)
+                filled[split] += counts[g]
+                break
+        else:
+            assigned["train"].append(g)
+
+    def _subset(split):
+        ids = [d for g in assigned[split] for d in groups[g]]
+        mask = np.isin(windows["drive_id"], ids)
+        return {
+            "X": windows["X"][mask], "y": windows["y"][mask],
+            "start_idx": windows["start_idx"][mask], "drive_id": windows["drive_id"][mask],
+            "drive_paths": sorted(windows["drive_paths"][d] for d in ids),
+        }
+
+    return _subset("train"), _subset("val"), _subset("test")
+
+
 if __name__ == "__main__":
     import sys
     from pathlib import Path as _Path
@@ -310,7 +448,7 @@ if __name__ == "__main__":
 
     PROJECT_ROOT = _find_project_root(_Path(__file__).resolve().parent)
     sys.path.insert(0, str(PROJECT_ROOT))
-    from src.models.velocity_model import FEATURE_COLS_DEFAULT
+    from src.models.velocity_model import FEATURE_COLS_DEFAULT, DEFAULT_WINDOW_SIZE
 
     # Relative to the project root, NOT an absolute path -- resolves to
     # your D:\...\idr-project\data\raw\real exactly, without hardcoding
@@ -330,7 +468,7 @@ if __name__ == "__main__":
     print(f"Found {len(csv_paths)} real drive files in {real_data_dir}\n")
 
     windows = build_windows_for_drives(
-        csv_paths, feature_cols=FEATURE_COLS_DEFAULT, window_size=20, stride=5,
+        csv_paths, feature_cols=FEATURE_COLS_DEFAULT, window_size=DEFAULT_WINDOW_SIZE, stride=10,
     )
 
     n_ok = len(windows["per_drive_diagnostics"])

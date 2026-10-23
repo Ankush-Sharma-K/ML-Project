@@ -57,11 +57,6 @@ def zupt_mask(
 
     return (accel_var < accel_var_thresh) & (gyro_var < gyro_mag_thresh)
 
-# Paste this function into src/calibration/zupt_classifier.py, directly AFTER the
-# existing zupt_mask() function and BEFORE evaluate_zupt_against_gps().
-# It relies on names that file already defines: np, pd, zupt_mask,
-# _rolling_std_magnitude, LIN_ACCEL_COLS, GYRO_COLS. No other changes needed there.
-
 def zupt_mask_with_fallback(
     df,
     accel_var_thresh=0.05,
@@ -102,15 +97,94 @@ def zupt_mask_with_fallback(
     }
 
 
+def calibration_stationary_mask(
+    df: pd.DataFrame,
+    speed_thresh_ms: float = 0.3,
+    min_duration_s: float = 3.0,
+    window: int = 20,
+) -> np.ndarray:
+    """GPS-confirmed stops to calibrate on (bias, leveling, ZUPT noise floor).
+
+    Calibration happens while GPS is still available, so GPS may be used
+    here -- unlike the ZUPT that runs during an outage. Real IO-VNBD GPS
+    only updates every ~10 s and HOLDS its last value, so a held 0 can
+    persist for several seconds after the car pulls away. Two guards:
+    the held speed must stay below `speed_thresh_ms` for `min_duration_s`,
+    and only the quieter half (by rolling accel std) of those samples is
+    kept, which drops the pulling-away tail. Empty if the drive never stops.
+    """
+    held_stop = (df["gps_speed_ms"] < speed_thresh_ms).to_numpy()
+    dt = float(np.median(np.diff(df["t_sec"].to_numpy())))
+    n = max(1, int(round(min_duration_s / dt)))
+    sustained = (
+        pd.Series(held_stop.astype(float)).rolling(n, center=True, min_periods=1).min().to_numpy() > 0
+    )
+    if not sustained.any():
+        return sustained
+    accel_std = _rolling_std_magnitude(df, LIN_ACCEL_COLS, window)
+    return sustained & (accel_std <= np.median(accel_std[sustained]))
+
+
+def zupt_mask_adaptive(
+    df: pd.DataFrame,
+    reference_mask: np.ndarray,
+    moving_mask: np.ndarray | None = None,
+    window: int = 30,
+    k_accel: float = 1.5,
+    k_gyro: float = 2.0,
+    moving_percentile: float = 5.0,
+    min_reference_samples: int = 100,
+) -> tuple[np.ndarray, dict]:
+    """IMU-only ZUPT whose thresholds are scaled to THIS phone's own at-rest
+    noise floor, measured on `reference_mask` (e.g. calibration_stationary_mask,
+    taken while GPS was available).
+
+    The fixed thresholds in zupt_mask() were tuned on synthetic data and do
+    not transfer: across real drives the at-rest rolling accel std ranges
+    from ~0.01 (S-T* phones) to ~0.2 m/s^2, and the moving value from ~0.2
+    to ~1.4 -- no single threshold separates both.
+
+    Safety caps, because a wrong ZUPT (zeroing velocity while driving) is far
+    worse than a missed one: each threshold is capped below the
+    `moving_percentile` of the same statistic on `moving_mask` (default:
+    GPS-interpolated speed > 5 m/s -- also known at calibration time), and
+    fewer than `min_reference_samples` reference samples (10 s at 10 Hz)
+    disables ZUPT for the drive. Without the cap, S-T8/S-T5/S-Vw8 -- whose
+    few "stop" samples were really slow rolling -- flagged 88-97% of
+    samples driven at > 5 m/s. Returns (mask, thresholds).
+    """
+    accel_var = _rolling_std_magnitude(df, LIN_ACCEL_COLS, window)
+    gyro_mag = np.sqrt(sum(df[c] ** 2 for c in GYRO_COLS))
+    gyro_var = gyro_mag.rolling(window, center=True, min_periods=1).std().fillna(0).to_numpy()
+    if reference_mask.sum() < min_reference_samples:
+        return np.zeros(len(df), dtype=bool), {"accel_thresh": None, "gyro_thresh": None}
+    accel_thresh = k_accel * float(np.median(accel_var[reference_mask]))
+    gyro_thresh = k_gyro * float(np.median(gyro_var[reference_mask]))
+    if moving_mask is None:
+        moving_mask = (df["gps_speed_interp_ms"] > 5.0).to_numpy()
+    if moving_mask.sum() > 0:
+        accel_thresh = min(accel_thresh, float(np.percentile(accel_var[moving_mask], moving_percentile)))
+        gyro_thresh = min(gyro_thresh, float(np.percentile(gyro_var[moving_mask], moving_percentile)))
+    mask = (accel_var < accel_thresh) & (gyro_var < gyro_thresh)
+    return mask, {"accel_thresh": accel_thresh, "gyro_thresh": gyro_thresh}
+
+
 def evaluate_zupt_against_gps(mask: np.ndarray, df: pd.DataFrame, speed_thresh_kmh: float = 1.0) -> dict:
     """Sanity-check the IMU-only ZUPT mask against GPS speed (independent
     signal). Not a ground truth -- GPS is coarse too -- but agreement
     here is a useful cross-check, and disagreement flags where GPS lag
-    was masking real stationary/moving samples."""
+    was masking real stationary/moving samples.
+
+    A flag only counts as a false positive when BOTH the held GPS speed and
+    the interpolated speed (if present) say the car is moving -- with ~10 s
+    real GPS fixes, either one alone mislabels the seconds around a stop."""
     gps_stationary = (df["gps_speed_kmh"] < speed_thresh_kmh).to_numpy()
+    gps_moving = ~gps_stationary
+    if "gps_speed_interp_ms" in df.columns:
+        gps_moving &= (df["gps_speed_interp_ms"] * 3.6 >= speed_thresh_kmh).to_numpy()
 
     tp = int(np.sum(mask & gps_stationary))
-    fp = int(np.sum(mask & ~gps_stationary))
+    fp = int(np.sum(mask & gps_moving))
     fn = int(np.sum(~mask & gps_stationary))
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else float("nan")

@@ -71,10 +71,32 @@ except ImportError:  # expected in this sandbox -- see module docstring
     _ModuleBase = object   # allows VelocityCNN's class body to parse/import
 
 
-FEATURE_COLS_DEFAULT = [
+# Gyro channels are the bias-corrected `_cal` versions (Day 3 computes them;
+# earlier versions of this list used the raw channels by oversight).
+FEATURE_COLS_BASE = [
     "lin_accel_x_mps2_cal_veh", "lin_accel_y_mps2_cal_veh", "lin_accel_z_mps2_cal_veh",
-    "gyro_yaw_rads", "gyro_pitch_rads", "gyro_roll_rads",
+    "gyro_yaw_rads_cal", "gyro_pitch_rads_cal", "gyro_roll_rads_cal",
 ]
+
+# Plus two orientation-independent magnitudes (added by
+# multi_drive_data.load_and_calibrate_drive). They do not depend on the
+# heading estimate, which is poor on some phones (heading fit r ~0 on S-A*).
+FEATURE_COLS_DEFAULT = FEATURE_COLS_BASE + ["lin_accel_horiz_mag_mps2", "gyro_mag_rads"]
+
+# Model selection (Day 8 audit, 5-fold cross-validation by recording over the
+# 66 train+val drives; test drives untouched):
+#   VelocityCNN, 2 s window, 6 features          4.73 +/- 0.87 m/s MAE
+#   VelocityCNNDeep (32-64-64-128), 20 s, 9 feat  3.88 +/- 1.05
+#   VelocityCNNDeep (64-128-128-256-256), 20 s    3.42 +/- 0.63   <- chosen
+# Longer windows help most (2 s -> 10 s alone: 3.45 -> 2.63 val MAE);
+# 30 s was worse than 20 s. Normalizing each drive by its own statistics
+# made things worse (3.60): the absolute vibration level carries speed
+# information. (The experiments' "9 features" also repeated
+# lin_accel_z_mps2_cal_veh as a third magnitude; that duplicate is dropped
+# here, leaving the 8 columns above.)
+DEFAULT_WINDOW_SIZE = 200
+DEFAULT_ARCH = "deep"
+DEFAULT_ARCH_KWARGS = {"channels": (64, 128, 128, 256, 256)}
 
 
 def compute_normalization_stats(X_train: np.ndarray) -> dict:
@@ -93,8 +115,12 @@ def compute_normalization_stats(X_train: np.ndarray) -> dict:
 
 def apply_normalization(X: np.ndarray, stats: dict) -> np.ndarray:
     """Apply previously-computed (training-set) mean/std to any window
-    array of the same shape (train, val, or later real inference input)."""
-    return (X - stats["mean"]) / stats["std"]
+    array of the same shape (train, val, or later real inference input).
+    Returns float32: 20 s windows are ~10x larger than the original 2 s
+    ones, and a float64 copy of the training set alone is several GB."""
+    mean = np.asarray(stats["mean"], dtype=np.float32)
+    std = np.asarray(stats["std"], dtype=np.float32)
+    return ((X - mean) / std).astype(np.float32, copy=False)
 
 
 class IMUWindowDataset(Dataset):
@@ -178,6 +204,50 @@ class VelocityCNN(_ModuleBase):
         on-device compression goal; check this number against your
         target platform's model-size budget before Day 8."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+class VelocityCNNDeep(_ModuleBase):
+    """Deeper 1D-CNN for long (e.g. 200-sample = 20 s) windows.
+
+    VelocityCNN's two 5-tap convs see only 9 samples before global
+    pooling, so on a long window it reduces to an average of very local
+    features. Here each block is Conv1d(k=5) + BatchNorm + ReLU +
+    MaxPool(2), so the receptive field grows with depth and covers whole
+    accelerate/brake events; the head sees global average AND max
+    pooling, then a small MLP with dropout.
+
+    Input:  (batch, n_features, window_size)
+    Output: (batch, 1) -- predicted forward speed, m/s
+    """
+
+    def __init__(self, n_features: int = 8, channels: tuple = (64, 128, 128, 256, 256)):
+        if torch is None:
+            raise ImportError("torch is not installed in this environment.")
+        super().__init__()
+        layers, c_prev = [], n_features
+        for c in channels:
+            layers += [nn.Conv1d(c_prev, c, kernel_size=5, padding=2), nn.BatchNorm1d(c),
+                       nn.ReLU(), nn.MaxPool1d(2)]
+            c_prev = c
+        self.body = nn.Sequential(*layers)
+        self.head = nn.Sequential(nn.Linear(2 * c_prev, 64), nn.ReLU(), nn.Dropout(0.2), nn.Linear(64, 1))
+
+    def forward(self, x):
+        h = self.body(x)
+        return self.head(torch.cat([h.mean(-1), h.amax(-1)], dim=1))
+
+    def count_parameters(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+def build_model(arch: str, n_features: int, **kwargs):
+    """Construct a velocity model by name ("cnn" or "deep") -- checkpoints
+    store `arch` + kwargs so inference rebuilds exactly what was trained."""
+    if arch == "cnn":
+        return VelocityCNN(n_features=n_features, **kwargs)
+    if arch == "deep":
+        return VelocityCNNDeep(n_features=n_features, **kwargs)
+    raise ValueError(f"Unknown model arch {arch!r} (expected 'cnn' or 'deep').")
 
 
 if __name__ == "__main__":

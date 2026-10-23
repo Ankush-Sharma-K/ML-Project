@@ -62,6 +62,16 @@ except ImportError:  # expected in this sandbox -- see module docstring
     DataLoader = None
 
 
+from contextlib import contextmanager
+
+@contextmanager
+def _null_context():
+    """No-op context manager used as a stand-in for torch.no_grad()
+    when torch is not installed (allows evaluate() to use a consistent
+    `with ctx:` pattern regardless of whether torch is available)."""
+    yield
+
+
 def train_one_epoch(model, loader, optimizer, loss_fn, device) -> float:
     """One pass over the training DataLoader. Returns mean loss."""
     model.train()
@@ -78,17 +88,25 @@ def train_one_epoch(model, loader, optimizer, loss_fn, device) -> float:
     return total_loss / n_samples
 
 
-@torch.no_grad() if torch is not None else (lambda f: f)
-def evaluate(model, loader, loss_fn, device) -> float:
-    """One no-grad pass over a DataLoader (val or test). Returns mean loss."""
+def evaluate(model, loader, loss_fn, device, return_mae: bool = False):
+    """One no-grad pass over a DataLoader (val or test). Returns mean loss,
+    or (mean loss, mean absolute error in m/s) with return_mae=True -- the
+    Huber loss value alone is hard to interpret."""
     model.eval()
-    total_loss, n_samples = 0.0, 0
-    for X_batch, y_batch in loader:
-        X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-        pred = model(X_batch)
-        loss = loss_fn(pred, y_batch)
-        total_loss += loss.item() * X_batch.size(0)
-        n_samples += X_batch.size(0)
+    total_loss, total_abs, n_samples = 0.0, 0.0, 0
+    # Use torch.no_grad() as a context manager (works on all PyTorch versions,
+    # avoids the conditional-decorator evaluation issue in the no-torch path).
+    ctx = torch.no_grad() if torch is not None else _null_context()
+    with ctx:
+        for X_batch, y_batch in loader:
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            pred = model(X_batch)
+            loss = loss_fn(pred, y_batch)
+            total_loss += loss.item() * X_batch.size(0)
+            total_abs += (pred - y_batch).abs().sum().item()
+            n_samples += X_batch.size(0)
+    if return_mae:
+        return total_loss / n_samples, total_abs / n_samples
     return total_loss / n_samples
 
 
@@ -100,6 +118,8 @@ def save_checkpoint(
     window_size: int,
     epoch: int,
     val_loss: float,
+    arch: str = "cnn",
+    arch_kwargs: dict | None = None,
 ) -> None:
     """Save model weights TOGETHER WITH everything needed to correctly
     preprocess a new window at inference time -- see module docstring
@@ -112,6 +132,8 @@ def save_checkpoint(
         "window_size": window_size,
         "epoch": epoch,
         "val_loss": val_loss,
+        "arch": arch,
+        "arch_kwargs": {k: list(v) if isinstance(v, tuple) else v for k, v in (arch_kwargs or {}).items()},
     }, path)
 
 
@@ -124,9 +146,36 @@ def load_checkpoint(path: str | Path, device: str = "cpu") -> dict:
     any new data before inference -- never recompute stats at
     inference time.
     """
-    ckpt = torch.load(path, map_location=device)
+    ckpt = torch.load(path, map_location=device, weights_only=True)
     ckpt["norm_stats"] = {k: np.array(v) for k, v in ckpt["norm_stats"].items()}
     return ckpt
+
+
+def load_model(path: str | Path, device: str = "cpu"):
+    """Rebuild the trained model from a checkpoint. Returns (model, ckpt).
+    Checkpoints from before `arch` was stored are the original VelocityCNN."""
+    from src.models.velocity_model import build_model
+
+    ckpt = load_checkpoint(path, device)
+    kwargs = {k: tuple(v) if isinstance(v, list) else v for k, v in ckpt.get("arch_kwargs", {}).items()}
+    model = build_model(ckpt.get("arch", "cnn"), len(ckpt["feature_cols"]), **kwargs).to(device)
+    model.load_state_dict(ckpt["model_state_dict"])
+    model.eval()
+    return model, ckpt
+
+
+def predict(model, windows: dict, norm_stats: dict, device: str = "cpu", batch_size: int = 1024) -> np.ndarray:
+    """Predicted speed (m/s) for every window in `windows`, normalized with
+    the TRAINING stats from the checkpoint."""
+    from src.models.velocity_model import IMUWindowDataset
+
+    loader = DataLoader(IMUWindowDataset(windows, norm_stats), batch_size=batch_size, shuffle=False)
+    model.eval()
+    out = []
+    with torch.no_grad():
+        for X_batch, _ in loader:
+            out.append(model(X_batch.to(device)).squeeze(-1).cpu().numpy())
+    return np.concatenate(out)
 
 
 def train_velocity_model(
@@ -140,6 +189,9 @@ def train_velocity_model(
     lr: float = 1e-3,
     patience: int = 10,
     device: str = "cpu",
+    arch: str = "cnn",
+    arch_kwargs: dict | None = None,
+    weight_decay: float = 0.0,
 ) -> dict:
     """Full training loop. Returns a history dict:
     {"train_loss": [...], "val_loss": [...], "best_epoch": int,
@@ -159,7 +211,7 @@ def train_velocity_model(
         )
 
     from src.models.velocity_model import (
-        compute_normalization_stats, IMUWindowDataset, VelocityCNN,
+        compute_normalization_stats, IMUWindowDataset, build_model,
     )
 
     norm_stats = compute_normalization_stats(windows_train["X"])
@@ -169,11 +221,11 @@ def train_velocity_model(
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
-    model = VelocityCNN(n_features=len(feature_cols)).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    model = build_model(arch, len(feature_cols), **(arch_kwargs or {})).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = nn.SmoothL1Loss()  # Huber loss -- see module docstring for why
 
-    history = {"train_loss": [], "val_loss": []}
+    history = {"train_loss": [], "val_loss": [], "val_mae": []}
     best_val_loss = float("inf")
     best_epoch = -1
     epochs_without_improvement = 0
@@ -181,9 +233,10 @@ def train_velocity_model(
     for epoch in range(epochs):
         t0 = time.time()
         train_loss = train_one_epoch(model, train_loader, optimizer, loss_fn, device)
-        val_loss = evaluate(model, val_loader, loss_fn, device)
+        val_loss, val_mae = evaluate(model, val_loader, loss_fn, device, return_mae=True)
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
+        history["val_mae"].append(val_mae)
 
         improved = val_loss < best_val_loss
         if improved:
@@ -192,13 +245,13 @@ def train_velocity_model(
             epochs_without_improvement = 0
             save_checkpoint(
                 checkpoint_path, model, norm_stats, feature_cols,
-                window_size, epoch, val_loss,
+                window_size, epoch, val_loss, arch, arch_kwargs,
             )
         else:
             epochs_without_improvement += 1
 
         print(f"epoch {epoch+1}/{epochs}  train_loss={train_loss:.4f}  "
-              f"val_loss={val_loss:.4f}  ({time.time()-t0:.1f}s)"
+              f"val_loss={val_loss:.4f}  val_MAE={val_mae:.3f} m/s  ({time.time()-t0:.1f}s)"
               f"{'  <- best so far, saved' if improved else ''}")
 
         if epochs_without_improvement >= patience:
@@ -246,7 +299,7 @@ if __name__ == "__main__":
             "  2. Build windows + a time-ordered train/val split\n"
             "  3. Train VelocityCNN with early stopping, checkpointing the "
             "BEST validation epoch (not the last)\n"
-            "  4. Save the checkpoint to results/checkpoints/velocity_model.pt "
+            "  4. Save the checkpoint to results/checkpoints/velocity_model_synthetic.pt "
             "-- bundled with normalization stats, feature column names, and "
             "window size, all needed for correct inference later\n"
             "Report back: final train_loss/val_loss, which epoch was best, "
@@ -261,7 +314,7 @@ if __name__ == "__main__":
         from src.calibration.bias_estimation import estimate_constant_bias, apply_bias_correction
         from src.calibration.mount_alignment import estimate_mount_rotation, apply_mount_alignment
         from src.models.dataset_prep import build_windows, train_val_split_by_time
-        from src.models.velocity_model import FEATURE_COLS_DEFAULT
+        from src.models.velocity_model import FEATURE_COLS_BASE  # synthetic demo: no magnitude columns
 
         csv_path = PROJECT_ROOT / "data" / "raw" / "SYNTH-drive1.csv"
         df = load_smartphone_drive(csv_path)
@@ -274,14 +327,14 @@ if __name__ == "__main__":
         df["gps_speed_ms"] = df["gps_speed_kmh"] / 3.6
 
         windows = build_windows(
-            df, feature_cols=FEATURE_COLS_DEFAULT, target_col="gps_speed_ms",
+            df, feature_cols=FEATURE_COLS_BASE, target_col="gps_speed_ms",
             window_size=20, stride=5,
         )
         train_w, val_w = train_val_split_by_time(windows, val_fraction=0.2)
 
         result = train_velocity_model(
-            train_w, val_w, feature_cols=FEATURE_COLS_DEFAULT, window_size=20,
-            checkpoint_path=PROJECT_ROOT / "results" / "checkpoints" / "velocity_model.pt",
+            train_w, val_w, feature_cols=FEATURE_COLS_BASE, window_size=20,
+            checkpoint_path=PROJECT_ROOT / "results" / "checkpoints" / "velocity_model_synthetic.pt",
             epochs=50, batch_size=32, lr=1e-3, patience=10,
         )
         print(f"\nBest epoch: {result['best_epoch']+1}, "
