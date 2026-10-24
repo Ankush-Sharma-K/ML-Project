@@ -1,0 +1,98 @@
+
+======================================================================
+Phase 6 — GNSS + INS fusion (EKF) on the Days 10-12 outages (TEST + VAL drives)
+======================================================================
+  S-A8.csv      15 outages  truth=gps  map=yes
+  S-T7.csv      15 outages  truth=gps  map=yes
+  S-Vta29.csv   15 outages  truth=wheel  map=yes
+  S-Vw4.csv     15 outages  truth=wheel  map=yes
+  S-M.csv       15 outages  truth=wheel  map=yes
+  S-S2.csv      15 outages  truth=wheel  map=yes
+  S-Vta30.csv   15 outages  truth=wheel  map=yes
+  S-Vw16a.csv   15 outages  truth=wheel  map=yes
+  S-Vw3.csv     15 outages  truth=wheel  map=yes
+  S-Y1.csv      15 outages  truth=gps  map=yes
+
+1. Real-time end position — TEST (4 drives)
+Method                                          Outage  Median err (m)  P90 (m)      N
+----------------------------------------------------------------------------------------
+Day 10: anchored ML + gyro                         30s            97.2      313     60
+EKF fusion (real time)                             30s           113.0      282     60
+Day 12: anchored ML + gyro + map (route)           30s            72.4      314     60
+EKF fusion + map (route)                           30s            66.1      201     60
+
+Day 10: anchored ML + gyro                         60s           223.9      539     60
+EKF fusion (real time)                             60s           200.0      464     60
+Day 12: anchored ML + gyro + map (route)           60s           109.7      657     60
+EKF fusion + map (route)                           60s           111.5      478     60
+
+Day 10: anchored ML + gyro                        120s           750.6     1875     60
+EKF fusion (real time)                            120s           564.7     1361     60
+Day 12: anchored ML + gyro + map (route)          120s           812.8     1898     60
+EKF fusion + map (route)                          120s           484.3     1467     60
+
+
+2. Tunnel track after GPS returns (hidden fixes inside the outage) — TEST
+Method                                          Outage  Median err (m)  P90 (m)      N
+----------------------------------------------------------------------------------------
+EKF real time (no exit fix)                        30s            21.5      103    578
+Straight line entry -> exit fix                    30s            22.9       65    578
+Day 10 DR, end error spread over time              30s            15.0       46    578
+EKF + RTS smoother (uses exit fix)                 30s            10.2       35    578
+
+EKF real time (no exit fix)                        60s            44.6      175   1163
+Straight line entry -> exit fix                    60s            52.3      190   1163
+Day 10 DR, end error spread over time              60s            41.4      100   1163
+EKF + RTS smoother (uses exit fix)                 60s            20.5       97   1163
+
+EKF real time (no exit fix)                       120s           117.6      441   2367
+Straight line entry -> exit fix                   120s           134.3      349   2367
+Day 10 DR, end error spread over time             120s           140.2      268   2367
+EKF + RTS smoother (uses exit fix)                120s            44.6      175   2367
+
+
+1. Real-time end position — ALL (10 drives)
+Method                                          Outage  Median err (m)  P90 (m)      N
+----------------------------------------------------------------------------------------
+Day 10: anchored ML + gyro                         30s           108.6      325    150
+EKF fusion (real time)                             30s           111.0      321    150
+Day 12: anchored ML + gyro + map (route)           30s            78.9      340    150
+EKF fusion + map (route)                           30s            80.1      340    150
+
+Day 10: anchored ML + gyro                         60s           215.9      710    150
+EKF fusion (real time)                             60s           203.7      737    150
+Day 12: anchored ML + gyro + map (route)           60s           167.9      675    150
+EKF fusion + map (route)                           60s           154.4      737    150
+
+Day 10: anchored ML + gyro                        120s           573.8     1811    150
+EKF fusion (real time)                            120s           521.6     1553    150
+Day 12: anchored ML + gyro + map (route)          120s           505.0     1752    150
+EKF fusion + map (route)                          120s           412.3     1597    150
+
+
+2. Tunnel track after GPS returns (hidden fixes inside the outage) — ALL
+Method                                          Outage  Median err (m)  P90 (m)      N
+----------------------------------------------------------------------------------------
+EKF real time (no exit fix)                        30s            27.1      119    849
+Straight line entry -> exit fix                    30s            27.7       71    849
+Day 10 DR, end error spread over time              30s            17.6       57    849
+EKF + RTS smoother (uses exit fix)                 30s            12.1       48    849
+
+EKF real time (no exit fix)                        60s            54.5      214   1700
+Straight line entry -> exit fix                    60s            59.8      180   1700
+Day 10 DR, end error spread over time              60s            42.8      111   1700
+EKF + RTS smoother (uses exit fix)                 60s            25.2      103   1700
+
+EKF real time (no exit fix)                       120s           137.3      622   3505
+Straight line entry -> exit fix                   120s           136.3      348   3505
+Day 10 DR, end error spread over time             120s           129.3      284   3505
+EKF + RTS smoother (uses exit fix)                120s            61.1      255   3505
+
+
+3. Robustness: 15% of pre-outage fixes replaced by 200 m jumps; error predicting the entrance fix (TEST + VAL)
+   Last fix + speed/course extrapolation          median    20.3 m   P90   198.2 m   N 150
+   EKF without gate                               median    26.0 m   P90   207.3 m   N 150
+   EKF with chi-square gate                       median    20.1 m   P90    97.3 m   N 150
+   gate rejected 1143 of 1147 injected outliers and 443 genuine fixes
+
+Summary rows written to results/metrics.md (re-running replaces them).

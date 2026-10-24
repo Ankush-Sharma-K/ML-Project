@@ -1,0 +1,53 @@
+
+======================================================================
+Phase 3 — on-device velocity model (quantized engine: x86)
+======================================================================
+  OK S-M.csv: 10558 windows (3542 calibration-stop samples, heading=-37.09 deg via gps_intervals, fit r_fwd=0.395)
+  OK S-S2.csv: 9368 windows (4553 calibration-stop samples, heading=1.28 deg via gps_intervals, fit r_fwd=0.284)
+  OK S-T6.csv: 83 windows (140 calibration-stop samples, heading=74.99 deg via gps_intervals, fit r_fwd=0.037)
+  OK S-Vta26.csv: 174 windows (351 calibration-stop samples, heading=117.7 deg via gps_intervals, fit r_fwd=0.808)
+  OK S-Vta30.csv: 1694 windows (1164 calibration-stop samples, heading=1.77 deg via gps_intervals, fit r_fwd=0.586)
+  OK S-Vta5.csv: 11 windows (0 calibration-stop samples, heading=-41.9 deg via accelerating, fit r_fwd=nan)
+  OK S-Vw16a.csv: 568 windows (350 calibration-stop samples, heading=-35.67 deg via gps_intervals, fit r_fwd=0.856)
+  OK S-Vw16b.csv: 93 windows (30 calibration-stop samples, heading=-28.43 deg via gps_intervals, fit r_fwd=0.863)
+  OK S-Vw3.csv: 367 windows (93 calibration-stop samples, heading=-87.66 deg via gps_intervals, fit r_fwd=0.158)
+  OK S-Y1.csv: 7009 windows (2943 calibration-stop samples, heading=-139.81 deg via gps_intervals, fit r_fwd=-0.024)
+  OK S-A8.csv: 6622 windows (405 calibration-stop samples, heading=67.47 deg via gps_intervals, fit r_fwd=-0.027)
+  OK S-T7.csv: 10111 windows (2478 calibration-stop samples, heading=16.99 deg via gps_intervals, fit r_fwd=0.279)
+  OK S-Vta10.csv: 131 windows (0 calibration-stop samples, heading=-75.76 deg via gps_intervals, fit r_fwd=0.739)
+  OK S-Vta13.csv: 21 windows (0 calibration-stop samples, heading=38.06 deg via accelerating, fit r_fwd=nan)
+  OK S-Vta21.csv: 188 windows (0 calibration-stop samples, heading=45.5 deg via gps_intervals, fit r_fwd=0.535)
+  OK S-Vta29.csv: 2350 windows (582 calibration-stop samples, heading=-0.11 deg via gps_intervals, fit r_fwd=0.276)
+  OK S-Vtb7.csv: 27 windows (0 calibration-stop samples, heading=-78.65 deg via accelerating, fit r_fwd=nan)
+  OK S-Vw4.csv: 12633 windows (2756 calibration-stop samples, heading=-120.24 deg via gps_intervals, fit r_fwd=0.138)
+  OK S-Vw5.csv: 82 windows (0 calibration-stop samples, heading=26.34 deg via accelerating, fit r_fwd=nan)
+  RATE MISMATCH S-A1.csv: detected 0.500s/sample (2.0 Hz), expected ~0.1s/sample (10 Hz) -- excluded from this batch, not windowed
+  RATE MISMATCH S-A13.csv: detected 0.500s/sample (2.0 Hz), expected ~0.1s/sample (10 Hz) -- excluded from this batch, not windowed
+  OK S-A5.csv: 1693 windows (1541 calibration-stop samples, heading=49.32 deg via gps_intervals, fit r_fwd=0.183)
+  SKIPPED S-I.csv: ValueError: No accelerating samples in mask -- cannot estimate heading.
+  OK S-S3c.csv: 740 windows (1457 calibration-stop samples, heading=9.47 deg via gps_intervals, fit r_fwd=0.088)
+  OK S-T11.csv: 110 windows (436 calibration-stop samples, heading=-71.08 deg via gps_intervals, fit r_fwd=0.747)
+  OK S-T5.csv: 7 windows (46 calibration-stop samples, heading=-42.9 deg via gps_intervals, fit r_fwd=0.186)
+  OK S-Vfa02.csv: 1347 windows (364 calibration-stop samples, heading=-72.02 deg via gps_intervals, fit r_fwd=0.595)
+  SKIPPED S-Vta15.csv: ValueError: No accelerating samples in mask -- cannot estimate heading.
+  OK S-Vta1a.csv: 510 windows (190 calibration-stop samples, heading=-22.72 deg via gps_intervals, fit r_fwd=0.488)
+  OK S-Vta22.csv: 28 windows (0 calibration-stop samples, heading=39.84 deg via gps_intervals, fit r_fwd=0.515)
+  OK S-Vta27.csv: 47 windows (141 calibration-stop samples, heading=96.23 deg via gps_intervals, fit r_fwd=0.726)
+  OK S-Vta6.csv: 24 windows (0 calibration-stop samples, heading=-31.02 deg via gps_intervals, fit r_fwd=0.341)
+  OK S-Vtb1.csv: 509 windows (592 calibration-stop samples, heading=-45.11 deg via gps_intervals, fit r_fwd=0.531)
+  OK S-Vtb2.csv: 111 windows (334 calibration-stop samples, heading=-87.03 deg via gps_intervals, fit r_fwd=0.433)
+  SKIPPED S-Vtb6.csv: ValueError: No accelerating samples in mask -- cannot estimate heading.
+  OK S-Vw10.csv: 10 windows (0 calibration-stop samples, heading=16.0 deg via accelerating, fit r_fwd=nan)
+  OK S-Vw14a.csv: 59 windows (0 calibration-stop samples, heading=72.69 deg via gps_intervals, fit r_fwd=0.799)
+  SKIPPED S-Vw17.csv: ValueError: No accelerating samples in mask -- cannot estimate heading.
+  OK S-Vw8.csv: 27 windows (31 calibration-stop samples, heading=-26.91 deg via gps_intervals, fit r_fwd=0.415)
+val 29925 / test 32165 windows; int8 calibration: 2000 TRAIN windows from 20 drives
+
+Model                   File (MB)  Val MAE  Test MAE  Max |diff|  Latency (ms)
+------------------------------------------------------------------------------
+original (PyTorch)           2.63    2.495     4.534           —          9.77
+velocity_model_fp32.ptl       2.64    2.495     4.534       0.000          6.41
+velocity_model_int8.ptl       0.71    2.473     4.580       8.551          0.61
+
+MAE in m/s on the val/test windows; diff = |exported - original| prediction (m/s); latency = one 20 s window, 1 CPU thread.
+Summary: results/compression_summary.json

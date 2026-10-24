@@ -1,0 +1,42 @@
+{
+  "feature_cols": [
+    "lin_accel_x_mps2_cal_veh",
+    "lin_accel_y_mps2_cal_veh",
+    "lin_accel_z_mps2_cal_veh",
+    "gyro_yaw_rads_cal",
+    "gyro_pitch_rads_cal",
+    "gyro_roll_rads_cal",
+    "lin_accel_horiz_mag_mps2",
+    "gyro_mag_rads"
+  ],
+  "window_size": 200,
+  "input": "raw window (batch, window_size, n_features)",
+  "output": "forward speed m/s (batch,)",
+  "quantized_engine": "x86",
+  "original_checkpoint_mb": 2.629967,
+  "n_parameters": 652353,
+  "original": {
+    "file_mb": 2.629967,
+    "latency_ms": 9.77055006660521,
+    "val_mae": 2.4953140068072455,
+    "test_mae": 4.534034493184477
+  },
+  "fp32": {
+    "file": "results\\checkpoints\\velocity_model_fp32.ptl",
+    "file_mb": 2.635375,
+    "latency_ms": 6.405799882486463,
+    "val_mae": 2.4953139668517172,
+    "test_mae": 4.534034703980894,
+    "max_abs_diff_ms": 1.1444091796875e-05,
+    "mean_abs_diff_ms": 1.3582658766608802e-06
+  },
+  "int8": {
+    "file": "results\\checkpoints\\velocity_model_int8.ptl",
+    "file_mb": 0.711261,
+    "latency_ms": 0.6120000034570694,
+    "val_mae": 2.473329837862638,
+    "test_mae": 4.580433267604183,
+    "max_abs_diff_ms": 8.550528526306152,
+    "mean_abs_diff_ms": 0.20632979273796082
+  }
+}
