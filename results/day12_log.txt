@@ -1,0 +1,112 @@
+
+======================================================================
+Day 12 — HMM map matching (+ turn consistency) during simulated GPS outages
+(same outages as Day 10; map used only when the search area is inside the corridor;
+ error = distance to the first GPS fix after the outage)
+======================================================================
+  S-A4.csv      15 outages  truth=gps
+  S-A5.csv      15 outages  truth=gps
+  S-A6.csv      15 outages  truth=gps
+  S-A7.csv      15 outages  truth=gps
+  S-A8.csv      15 outages  truth=gps  (+ full path, test)
+  S-M.csv       15 outages  truth=wheel  (+ full path, val)
+  S-S1.csv      15 outages  truth=wheel
+  S-S2.csv      15 outages  truth=wheel  (+ full path, val)
+  S-S3a.csv     15 outages  truth=wheel
+  S-S3b.csv     15 outages  truth=gps
+  S-S3c.csv     15 outages  truth=wheel
+  S-S4.csv      15 outages  truth=gps
+  S-T1.csv      15 outages  truth=gps
+  S-T10.csv     15 outages  truth=gps
+  S-T11.csv     13 outages  truth=gps
+  S-T2.csv      15 outages  truth=gps
+  S-T3.csv      15 outages  truth=gps
+  S-T4.csv      15 outages  truth=gps
+  S-T5.csv      15 outages  truth=gps
+  S-T7.csv      15 outages  truth=gps  (+ full path, test)
+  S-T8.csv      15 outages  truth=gps
+  S-T9.csv      15 outages  truth=gps
+  S-Vfa01.csv   15 outages  truth=gps
+  S-Vfa02.csv   15 outages  truth=gps
+  S-Vta14.csv    5 outages  truth=wheel
+  S-Vta16.csv   15 outages  truth=wheel
+  S-Vta17.csv   15 outages  truth=wheel
+  S-Vta1a.csv   15 outages  truth=wheel
+  S-Vta2.csv    15 outages  truth=wheel
+  S-Vta27.csv    1 outages  truth=wheel
+  S-Vta28.csv   15 outages  truth=wheel
+  S-Vta29.csv   15 outages  truth=wheel  (+ full path, test)
+  S-Vta30.csv   15 outages  truth=wheel  (+ full path, val)
+  S-Vta8.csv    12 outages  truth=wheel
+  S-Vtb1.csv    15 outages  truth=wheel
+  S-Vtb2.csv    15 outages  truth=wheel
+  S-Vtb5.csv    15 outages  truth=gps
+  S-Vw11.csv    15 outages  truth=wheel
+  S-Vw14a.csv    7 outages  truth=wheel
+  S-Vw14b.csv   15 outages  truth=gps
+  S-Vw14c.csv   15 outages  truth=wheel
+  S-Vw16a.csv   15 outages  truth=wheel  (+ full path, val)
+  S-Vw2.csv     15 outages  truth=wheel
+  S-Vw3.csv     15 outages  truth=wheel  (+ full path, val)
+  S-Vw4.csv     15 outages  truth=wheel  (+ full path, test)
+  S-Y1.csv      15 outages  truth=gps  (+ full path, val)
+
+Map usable (search area inside the corridor): 30s 99%, 60s 98%, 120s 88%
+
+PART A — true distance (46 drives)
+Method                                            Outage  Median err (m)  Median %  P90 (m)      N
+----------------------------------------------------------------------------------------------------
+True distance + last GPS course (straight line)      30s            98.4     19.2%      373    653
+True distance + gyro heading (Day 10)                30s            58.9     12.7%      322    653
+True distance + gyro + map (snap)                    30s            16.4      3.4%      326    653
+True distance + gyro + map (route)                   30s             8.7      1.8%      325    653
+
+True distance + last GPS course (straight line)      60s           239.2     26.8%      812    653
+True distance + gyro heading (Day 10)                60s           157.3     19.8%      745    653
+True distance + gyro + map (snap)                    60s            66.0      9.8%      735    653
+True distance + gyro + map (route)                   60s            32.7      4.4%      756    653
+
+True distance + last GPS course (straight line)     120s           650.7     38.9%     2052    653
+True distance + gyro heading (Day 10)               120s           446.8     27.1%     1979    653
+True distance + gyro + map (snap)                   120s           355.7     23.7%     1985    653
+True distance + gyro + map (route)                  120s           306.4     21.1%     2033    653
+
+
+PART B — full pipeline, TEST drives (4 drives)
+Method                                            Outage  Median err (m)  Median %  P90 (m)      N
+----------------------------------------------------------------------------------------------------
+Hold last fix + last course (baseline)               30s           119.9     22.5%      344     60
+Anchored ML + gyro heading (Day 10)                  30s            93.7     17.5%      313     60
+Anchored ML + gyro + map (snap)                      30s            72.8     12.3%      294     60
+Anchored ML + gyro + map (route, full method)        30s            72.0     11.0%      314     60
+
+Hold last fix + last course (baseline)               60s           331.6     28.7%      759     60
+Anchored ML + gyro heading (Day 10)                  60s           207.8     20.9%      539     60
+Anchored ML + gyro + map (snap)                      60s           137.6     14.3%      686     60
+Anchored ML + gyro + map (route, full method)        60s           105.9     12.3%      657     60
+
+Hold last fix + last course (baseline)              120s           929.4     46.0%     1766     60
+Anchored ML + gyro heading (Day 10)                 120s           746.8     35.1%     1873     60
+Anchored ML + gyro + map (snap)                     120s           696.4     31.1%     1760     60
+Anchored ML + gyro + map (route, full method)       120s           711.8     35.6%     1898     60
+
+
+PART B' — full pipeline, TEST + VAL drives (10 drives)
+Method                                            Outage  Median err (m)  Median %  P90 (m)      N
+----------------------------------------------------------------------------------------------------
+Hold last fix + last course (baseline)               30s           160.1     38.3%      355    150
+Anchored ML + gyro heading (Day 10)                  30s           106.2     22.8%      325    150
+Anchored ML + gyro + map (snap)                      30s            79.7     17.3%      326    150
+Anchored ML + gyro + map (route, full method)        30s            78.3     16.4%      341    150
+
+Hold last fix + last course (baseline)               60s           354.3     48.2%      762    150
+Anchored ML + gyro heading (Day 10)                  60s           214.3     28.0%      710    150
+Anchored ML + gyro + map (snap)                      60s           169.9     23.9%      718    150
+Anchored ML + gyro + map (route, full method)        60s           156.5     22.6%      681    150
+
+Hold last fix + last course (baseline)              120s           873.7     57.1%     1818    150
+Anchored ML + gyro heading (Day 10)                 120s           576.4     36.6%     1811    150
+Anchored ML + gyro + map (snap)                     120s           522.9     31.5%     1753    150
+Anchored ML + gyro + map (route, full method)       120s           476.6     31.5%     1752    150
+
+Summary rows written to results/metrics.md (re-running replaces them).

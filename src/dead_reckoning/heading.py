@@ -151,10 +151,46 @@ def end_position(speed: np.ndarray, heading_rad: np.ndarray, dt: np.ndarray) -> 
     return float(np.sum(d * np.sin(heading_rad))), float(np.sum(d * np.cos(heading_rad)))
 
 
+def path_outage_starts(df: pd.DataFrame, outage_lengths_s, n_starts: int, v_true: np.ndarray, seed: int,
+                       min_history_rows: int = 1200) -> np.ndarray:
+    """Outage start rows used by the Days 10-12 (and Phase 6) benchmarks: GPS
+    fixes while moving (> 3 m/s), >= `min_history_rows` into the drive, with a
+    fix within 15 s after the longest outage, no time gap and finite truth;
+    `n_starts` drawn with `seed`."""
+    from src.io_vnbd_loader import _gps_fix_index
+
+    t = df["t_sec"].to_numpy(dtype=float)
+    held = df["gps_speed_ms"].to_numpy(dtype=float)
+    dt_med = float(np.median(np.diff(t)))
+    fix = _gps_fix_index(df)
+    fixes_t = t[fix]
+    L_max = max(outage_lengths_s)
+    cand = []
+    for s in fix:
+        if s < min_history_rows or held[s] <= 3.0:
+            continue
+        k = np.searchsorted(fixes_t, t[s] + L_max)
+        if k >= len(fix) or fixes_t[k] - t[s] > L_max + 15:
+            continue
+        e = fix[k]
+        if t[e] - t[s] > (e - s) * dt_med * 1.2 or np.any(~np.isfinite(v_true[s:e + 1])):
+            continue
+        cand.append(s)
+    if not cand:
+        return np.array([], dtype=int)
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(cand, size=min(n_starts, len(cand)), replace=False))
+
+
 def simulate_path_outages(df: pd.DataFrame, outage_lengths_s=(30, 60, 120), n_starts: int = 15,
                           truth: np.ndarray | None = None, seed: int = 0, min_history_rows: int = 1200,
-                          ml_methods=None, window_size: int = 200) -> tuple[pd.DataFrame, pd.DataFrame]:
+                          ml_methods=None, window_size: int = 200, map_match=None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Day 10 benchmark on one drive (loaded + gravity-compensated, not calibrated).
+
+    `map_match` (Day 11, optional) = `HMMMapMatcher.match_outage`; for every
+    speed with the gyro heading it adds methods "<speed>+gyro+map_snap" and
+    "+map_route" (plain dead reckoning where the map cannot be used,
+    `map_ok` = False). Errors are measured in metres around the entrance fix.
 
     Starts are GPS fixes while moving, with >= `min_history_rows` before them
     (2 min at 10 Hz) and a fix after the longest outage. For each start:
@@ -168,9 +204,8 @@ def simulate_path_outages(df: pd.DataFrame, outage_lengths_s=(30, 60, 120), n_st
     from src.models.multi_drive_data import calibrate, apply_calibration
 
     t = df["t_sec"].to_numpy(dtype=float)
-    dt_med = float(np.median(np.diff(t)))
     dt = np.clip(np.diff(t, prepend=t[0]), 0.0, 1.0)
-    east, north = local_east_north(df)
+    lat, lon =df["gps_lat_deg"].to_numpy(dtype=float), df["gps_lon_deg"].to_numpy(dtype=float)
     held = df["gps_speed_ms"].to_numpy(dtype=float)
     course = df["gps_orientation_deg"].to_numpy(dtype=float)
     v_true = df["gps_speed_interp_ms"].to_numpy() if truth is None else np.asarray(truth, dtype=float)
@@ -178,22 +213,9 @@ def simulate_path_outages(df: pd.DataFrame, outage_lengths_s=(30, 60, 120), n_st
     fixes_t = t[fix]
     integrator = GyroTurnIntegrator(df)
     L_max = max(outage_lengths_s)
-
-    cand = []
-    for s in fix:
-        if s < min_history_rows or held[s] <= 3.0:
-            continue
-        k = np.searchsorted(fixes_t, t[s] + L_max)
-        if k >= len(fix) or fixes_t[k] - t[s] > L_max + 15:
-            continue
-        e = fix[k]
-        if t[e] - t[s] > (e - s) * dt_med * 1.2 or np.any(~np.isfinite(v_true[s:e + 1])):
-            continue
-        cand.append(s)
-    if not cand:
+    starts = path_outage_starts(df, outage_lengths_s, n_starts, v_true, seed, min_history_rows)
+    if len(starts) == 0:
         return pd.DataFrame(), pd.DataFrame()
-    rng = np.random.default_rng(seed)
-    starts = np.sort(rng.choice(cand, size=min(n_starts, len(cand)), replace=False))
 
     rows_a, rows_b = [], []
     for s in starts:
@@ -214,26 +236,43 @@ def simulate_path_outages(df: pd.DataFrame, outage_lengths_s=(30, 60, 120), n_st
             ml = ml_methods(seg, window_size - 1, e_max - s, float(held[s]), t[rr])
             speeds_b = {"hold_speed": np.full(len(rr), held[s]), "anchored_ml": ml["anchored_ml"]}
 
-        for L in outage_lengths_s:
-            e = fix[np.searchsorted(fixes_t, t[s] + L)]
+        ends = [fix[np.searchsorted(fixes_t, t[s] + L)] for L in outage_lengths_s]
+        matched_a, matched_b = {}, {}
+        if map_match is not None:
+            matched_a = map_match(s, rr, v_true[rr], headings["gyro"], ends)
+            matched_b = {sp: map_match(s, rr, v, headings["gyro"], ends) for sp, v in speeds_b.items()}
+
+        for L, e in zip(outage_lengths_s, ends):
             m = rr <= e
             true_dist = float(np.sum(v_true[s + 1: e + 1] * dt[s + 1: e + 1]))
+            ex = (lon[e] - lon[s]) * np.cos(np.radians(lat[s])) * M_PER_DEG_LAT
+            ey = (lat[e] - lat[s]) * M_PER_DEG_LAT
             base = {"start_idx": int(s), "history_min": t[s] / 60, "outage_s": L, "true_dist_m": true_dist,
                     "gyro_ok": fit is not None, "gyro_r": abs(fit.r) if fit is not None else np.nan,
                     "gyro_standard_axes": fit.perm == (0, 1, 2) if fit is not None else None}
 
-            def _err(v, hdg):
-                dx, dy = end_position(v[m], hdg[m], dt[rr[m]])
-                return float(np.hypot(east[s] + dx - east[e], north[s] + dy - north[e]))
+            def _dr(v, hdg):
+                return end_position(v[m], hdg[m], dt[rr[m]])
+
+            def _row(method, dxy, map_ok=None):
+                err = float(np.hypot(dxy[0] - ex, dxy[1] - ey))
+                return {**base, "method": method, "abs_err_m": err, "pct_err": 100 * err / max(true_dist, 1.0),
+                        "map_ok": map_ok}
+
+            def _map_rows(prefix, matched, dr_xy):
+                res = matched.get(int(e))
+                for kind in ("snap", "route", "turn"):
+                    yield _row(f"{prefix}+map_{kind}", res[kind] if res else dr_xy, map_ok=res is not None)
 
             for h, hdg in headings.items():
-                err = _err(v_true[rr], hdg)
-                rows_a.append({**base, "method": h, "abs_err_m": err, "pct_err": 100 * err / max(true_dist, 1.0)})
+                rows_a.append(_row(h, _dr(v_true[rr], hdg)))
+            if map_match is not None:
+                rows_a.extend(_map_rows("gyro", matched_a, _dr(v_true[rr], headings["gyro"])))
             for sp, v in speeds_b.items():
                 for h, hdg in headings.items():
-                    err = _err(v, hdg)
-                    rows_b.append({**base, "method": f"{sp}+{h}", "abs_err_m": err,
-                                   "pct_err": 100 * err / max(true_dist, 1.0)})
+                    rows_b.append(_row(f"{sp}+{h}", _dr(v, hdg)))
+                if map_match is not None:
+                    rows_b.extend(_map_rows(f"{sp}+gyro", matched_b[sp], _dr(v, headings["gyro"])))
     return pd.DataFrame(rows_a), pd.DataFrame(rows_b)
 
 
