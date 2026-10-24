@@ -62,3 +62,31 @@ where a vehicle file exists. See PROGRESS.md, "Day 8 audit, part 3".
 | Day 9 | Strapdown INS + adaptive ZUPT, 120s outage | 120 | 636.4 | 29.2 | 906.3 | 240 | 6 |
 | Day 9 | ML velocity model, 120s outage | 120 | 221.4 | 12.3 | 429.1 | 240 | 6 |
 | Day 9 | Anchored ML (entry correction, 20 s fade), 120s outage | 120 | 206.1 | 12.0 | 348.6 | 240 | 6 |
+
+## Day 10 — heading only: end-position error with TRUE distance (all drives)
+
+| Day | Method | Outage (s) | Median abs error (m) | Median error (% of distance) | Mean abs error (m) | Outages | Drives |
+|---|---|---|---|---|---|---|---|
+| Day 10 | True distance + last GPS course (straight line), 30s outage | 30 | 98.4 | 19.3 | 183.1 | 653 | 46 |
+| Day 10 | True distance + calibrated gyro heading, 30s outage | 30 | 58.9 | 12.7 | 151.2 | 653 | 46 |
+| Day 10 | True distance + last GPS course (straight line), 60s outage | 60 | 239.2 | 26.9 | 391.2 | 653 | 46 |
+| Day 10 | True distance + calibrated gyro heading, 60s outage | 60 | 157.3 | 19.9 | 325.1 | 653 | 46 |
+| Day 10 | True distance + last GPS course (straight line), 120s outage | 120 | 650.5 | 39.0 | 930.3 | 653 | 46 |
+| Day 10 | True distance + calibrated gyro heading, 120s outage | 120 | 439.4 | 27.0 | 798.4 | 653 | 46 |
+
+## Day 10 — full 2-D path during simulated GPS outages (TEST drives only)
+
+| Day | Method | Outage (s) | Median abs error (m) | Median error (% of distance) | Mean abs error (m) | Outages | Drives |
+|---|---|---|---|---|---|---|---|
+| Day 10 | Hold last fix + last course (baseline), 30s outage | 30 | 119.9 | 22.5 | 166.1 | 60 | 4 |
+| Day 10 | Anchored ML + last course, 30s outage | 30 | 105.6 | 18.5 | 148.9 | 60 | 4 |
+| Day 10 | Hold last fix + gyro heading, 30s outage | 30 | 123.8 | 20.8 | 159.4 | 60 | 4 |
+| Day 10 | Anchored ML + gyro heading (full method), 30s outage | 30 | 93.7 | 17.5 | 137.8 | 60 | 4 |
+| Day 10 | Hold last fix + last course (baseline), 60s outage | 60 | 333.1 | 28.7 | 368.3 | 60 | 4 |
+| Day 10 | Anchored ML + last course, 60s outage | 60 | 230.7 | 23.9 | 303.3 | 60 | 4 |
+| Day 10 | Hold last fix + gyro heading, 60s outage | 60 | 317.7 | 27.5 | 372.9 | 60 | 4 |
+| Day 10 | Anchored ML + gyro heading (full method), 60s outage | 60 | 207.1 | 20.7 | 296.0 | 60 | 4 |
+| Day 10 | Hold last fix + last course (baseline), 120s outage | 120 | 931.2 | 46.2 | 1002.0 | 60 | 4 |
+| Day 10 | Anchored ML + last course, 120s outage | 120 | 748.2 | 37.1 | 897.7 | 60 | 4 |
+| Day 10 | Hold last fix + gyro heading, 120s outage | 120 | 811.4 | 39.8 | 1031.2 | 60 | 4 |
+| Day 10 | Anchored ML + gyro heading (full method), 120s outage | 120 | 746.6 | 35.2 | 925.8 | 60 | 4 |

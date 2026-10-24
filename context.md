@@ -176,6 +176,23 @@ clearly; S-Y1 and S-S4 do not match at all.
 **Run:** `python -m src.dead_reckoning.strapdown_ins` (Day 8, all drives) and
 `python -m src.dead_reckoning.ins_with_ml_velocity` (Day 9, TEST drives).
 
+### Day 10 — heading and 2-D path (`src/dead_reckoning/heading.py`)
+
+| Name | Signature | Notes |
+|---|---|---|
+| `local_east_north` | `(df) -> (east, north)` | GPS lat/lon -> metres around the drive's median position |
+| `gps_fix_intervals` | `(t, fix, speed, course_deg, end, min_dt=4.0, max_dt=20.0, min_speed_ms=3.0) -> (i0, i1, dcourse_rad)` | moving fix intervals before row `end` |
+| `GyroTurnIntegrator` | `(df)`; `.rotation(a, b, perm, signs, bias)` | cumulative gyro x gravity products; O(1) rotation for any mapping |
+| `fit_gyro_heading` | `(integrator, gyro_bias, i0, i1, dcourse, min_intervals=8, min_corr=0.5) -> GyroHeadingFit or None` | picks gyro axis order/signs + scale k from pre-outage GPS course changes |
+| `gyro_heading` | `(integrator, fit, gyro_bias, start, rows, course0_rad) -> heading_rad` | clockwise from north |
+| `end_position` | `(speed, heading_rad, dt) -> (dx_east, dy_north)` | |
+| `simulate_path_outages` | `(df_raw, outage_lengths_s=(30,60,120), n_starts=15, truth=None, seed=0, min_history_rows=1200, ml_methods=None, window_size=200) -> (part_a, part_b)` | starts at GPS fixes; error = distance to first fix after the outage |
+
+Gyro axis order differs between phones: the standard order was the best fit
+in only ~17% of outages, so the mapping is always fitted. The phone's fused
+orientation yaw is NOT used (calibratable in only ~20% of outages).
+Run: `python -m src.dead_reckoning.heading`.
+
 ### Not yet built (reserve these module paths)
 | Phase | Expected file(s) |
 |---|---|

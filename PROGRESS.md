@@ -19,7 +19,7 @@ Trained/evaluated against the IO-VNBD dataset per the problem statement.
 | 6 — GNSS+INS Fusion | 13–14 | UKF/EKF fusion, adaptive noise, seamless GNSS↔DR handoff |
 | 7 — App & Deployment | 15 | Edge engine API, mobile app UI, packaging, final submission |
 
-**Status: Days 1–9 done on the real IO-VNBD data. Day 8 audit (parts 1–3) complete; Day 9 = anchored ML velocity during GPS outages. Next: Phase 5 (map matching).**
+**Status: Days 1–10 done on the real IO-VNBD data. Day 9 = anchored ML velocity, Day 10 = gyro heading + 2-D path during GPS outages. Next: Phase 5 (map matching).**
 
 ---
 
@@ -413,3 +413,57 @@ verified bit-identical), `src/dead_reckoning/strapdown_ins.py` (new
 `src/dead_reckoning/ins_with_ml_velocity.py`, new `src/utils/vehicle_truth.py`,
 vehicle files in `data/raw/vehicle/`. Outputs: `results/day8_outage_benchmark.csv`,
 `results/day9_outage_benchmark.csv`, `results/day8_log.txt`, `results/day9_log.txt`.
+
+
+---
+
+## Day 10 — Direction and 2-D path during GPS outages
+
+**Why:** Days 8-9 estimate how far the car travels. The problem statement also
+needs the direction and the path (for the map comparison in Phase 5).
+
+**Method (`src/dead_reckoning/heading.py`):** heading = GPS course at the
+entrance + the phone's accumulated rotation about the vertical axis
+(gyro . gravity direction). The gyro columns do not follow the same axis order
+and signs as the gravity columns on most phones -- the standard pairing was the
+best fit in only 17% of outages -- so the axis order (6 options), signs
+(4 patterns) and scale are fitted on GPS course changes BEFORE each outage, like
+the rest of the calibration. The fit is used when its correlation is >= 0.5
+(75% of outages, median |r| 0.84); otherwise the heading falls back to the last
+GPS course. The phone's fused orientation yaw was tested too but could be
+calibrated in only 20% of outages, so it is not used.
+
+**Benchmark:** outages start right after a GPS fix (so the entrance position,
+speed and course are real) and are scored at the first GPS fix after 30/60/120 s:
+error = metres between the estimated and the GPS end position.
+
+Part A — heading only (true distance; 46 drives, 653 outages per length):
+
+| Outage | Straight line (last GPS course) | Calibrated gyro heading |
+|---|---|---|
+| 30 s | 98 m (19%) | **59 m** (13%) |
+| 60 s | 239 m (27%) | **157 m** (20%) |
+| 120 s | 651 m (39%) | **439 m** (27%) |
+
+Part B — full path on TEST drives (4 drives, 60 outages per length):
+
+| Outage | Hold last fix + straight line (baseline) | Anchored ML + straight line | **Anchored ML + gyro (full method)** |
+|---|---|---|---|
+| 30 s | 120 m | 106 m | **94 m** |
+| 60 s | 333 m | 231 m | **207 m** |
+| 120 s | 931 m | 748 m | **747 m** |
+
+(median distance to the GPS end position; % = of distance driven)
+
+**Reading:** the calibrated gyro cuts the position error caused by direction by
+a third to a half. The full method (anchored-ML distance + gyro heading) is the
+best path estimate at every outage length (-22% / -38% / -20% vs the baseline),
+but only 4 test drives qualify here, so Part A is the stronger evidence for the
+heading. Even with perfect distance, a 2-minute outage still ends ~440 m off:
+small heading errors grow into large sideways errors. Phone sensors alone
+cannot fix this -- constraining the path to the road network (Phase 5, map
+matching) is the next step.
+
+**Files:** new `src/dead_reckoning/heading.py`; outputs
+`results/day10_heading_benchmark.csv`, `results/day10_path_benchmark.csv`,
+`results/day10_log.txt`; Day 10 tables in `results/metrics.md`.

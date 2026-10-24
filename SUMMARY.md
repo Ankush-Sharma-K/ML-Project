@@ -741,3 +741,29 @@ few drives): trust moves from the entrance correction to the model within
 **Result:** see PROGRESS.md / results/metrics.md (Day 9 section). In 5-fold
 cross-validation against wheel truth, anchored ML beat holding the last
 speed at every outage length (47/88/176 m vs 61/141/315 m at 30/60/120 s).
+
+
+---
+
+## Day 10 — Direction and the 2-D path
+
+**Concept:** Distance alone is not a path. To draw the car's route inside the
+tunnel we also need its direction. The GPS gives the direction (course) at the
+tunnel entrance; after that, the gyroscope measures how fast the car turns, and
+adding up those turns gives the current direction. Distance (Day 9) along that
+direction gives the east/north path.
+
+The catch, found by checking real data: phones do not report the gyroscope in
+the same axis order or with the same signs as the gravity sensor, and this
+differs between phones. So the "which axis is vertical rotation" question is
+answered per phone, from the GPS course changes before the outage -- the same
+"calibrate with GPS while you still have it" idea as Days 3-4.
+
+**Result:** the gyro heading cuts the direction-caused position error by a
+third to a half compared with assuming a straight line. Over long outages the
+error still grows to hundreds of metres, because small heading errors add up
+sideways -- which is exactly why Phase 5 matches the path to the road map.
+
+**Coding:** `src/dead_reckoning/heading.py` — `GyroTurnIntegrator`,
+`fit_gyro_heading`, `gyro_heading`, `simulate_path_outages`; run as
+`python -m src.dead_reckoning.heading`.

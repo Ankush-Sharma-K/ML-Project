@@ -1,6 +1,6 @@
 # IDR Project — Handoff Context for New Chat
 
-> Paste this entire file at the start of a new chat. Days 1–9 are done (see the Day 8 audit parts 1–3 and Day 9 at the end of PROGRESS.md); continue from Phase 5 (map matching).
+> Paste this entire file at the start of a new chat. Days 1–10 are done (see the Day 8 audit parts 1–3, Day 9 and Day 10 at the end of PROGRESS.md); continue from Phase 5 (map matching).
 
 ---
 
@@ -14,7 +14,7 @@
 
 ---
 
-## Current Status: Day 9 complete ✅ (Days 1–9 verified on the real drives)
+## Current Status: Day 10 complete ✅ (Days 1–10 verified on the real drives)
 
 | Phase | Status |
 |-------|--------|
@@ -24,6 +24,7 @@
 | Model training (run_training.py) | ✅ 20 s-window deep CNN on real drives — test MAE 4.53 m/s (per-drive 4.71) |
 | Phase 4 — Strapdown INS + ZUPT | ✅ Complete — honest simulated-outage benchmark |
 | Day 9 — Anchored ML velocity in outages | ✅ Complete — `ins_with_ml_velocity.py` |
+| Day 10 — Gyro heading + 2-D path in outages | ✅ Complete — `heading.py` |
 | Phase 5 — Map Matching | ❌ Not started |
 | Phase 6 — GNSS+INS Fusion | ❌ Not started |
 | Phase 7 — App & Deployment | ❌ Not started |
@@ -138,6 +139,7 @@ speed = last real GPS fix; truth = car wheel speed where a vehicle file aligns
 - Day 8, 57 drives (median distance error at 30 / 60 / 120 s): hold last fix 56 / 151 / 314 m; INS + ZUPT 107 / 286 / 784 m.
 - Day 9, TEST drives: hold 74 / 166 / 361 m; ML 87 / 136 / 221 m; **anchored ML 74 / 113 / 206 m**.
 - Cross-validated against wheel truth (39 drives): anchored ML 47 / 88 / 176 m vs hold 61 / 141 / 315 m.
+- Day 10 path (end-position error at 30 / 60 / 120 s): heading only, true distance — straight line 98 / 239 / 651 m, gyro 59 / 157 / 439 m; full path on test drives — baseline 120 / 333 / 931 m, anchored ML + gyro 94 / 207 / 747 m.
 
 ---
 
@@ -153,6 +155,10 @@ speed = last real GPS fix; truth = car wheel speed where a vehicle file aligns
 ---
 
 ## Next Steps for the Agent
+
+### Done in Day 10
+- `src/dead_reckoning/heading.py`: per-phone calibrated gyro heading (axis order/signs/scale fitted on pre-outage GPS), 2-D path, benchmark `python -m src.dead_reckoning.heading`
+- Phase 5 input: east/north path from anchored-ML speed + gyro heading (`simulate_path_outages` shows how to build it)
 
 ### Done in Day 9
 - `src/dead_reckoning/ins_with_ml_velocity.py`: anchored ML, speed = ML(t) + (v0 - ML(0)) * exp(-t / 20 s)
