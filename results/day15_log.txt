@@ -1,0 +1,38 @@
+
+======================================================================
+Phase 7 — streaming edge engine replay on the Days 10-13 outages (TEST + VAL)
+======================================================================
+  S-A8.csv      15 outages  (654 s)
+  S-T7.csv      15 outages  (654 s)
+  S-Vta29.csv   15 outages  (654 s)
+  S-Vw4.csv     15 outages  (654 s)
+  S-M.csv       15 outages  (654 s)
+  S-S2.csv      15 outages  (654 s)
+  S-Vta30.csv   15 outages  (654 s)
+  S-Vw16a.csv   15 outages  (654 s)
+  S-Vw3.csv     15 outages  (654 s)
+  S-Y1.csv      15 outages  (654 s)
+
+1-2. Real-time end error, TEST (4 drives) — median m
+Method                                           30 s     60 s    120 s
+Phase 6 batch EKF (torch fp32)                  113.0    200.0    564.7
+Engine, fp32 .ptl, no map                        94.5    181.5    443.6
+Phase 6 batch EKF + map                          66.1    111.5    484.3
+Engine, fp32 .ptl + map                          73.1    129.6    373.8
+Engine, int8 .ptl + map (deployed)               68.7    129.8    379.2
+
+1-2. Real-time end error, TEST + VAL (10 drives) — median m
+Method                                           30 s     60 s    120 s
+Phase 6 batch EKF (torch fp32)                  111.0    203.7    521.6
+Phase 6 batch EKF + map                          80.1    154.4    412.3
+Engine, int8 .ptl + map (deployed)               79.8    155.8    376.2
+
+2. Tunnel track after the 120 s outage (hidden fixes), int8 + map — median m
+   TEST        real time   78.2   RTS corrected   43.1   (N 2367)
+   TEST + VAL  real time   91.5   RTS corrected   52.1   (N 3505)
+
+3. Route verification during the outage (int8 + map)
+   TEST        false alarms on the correct route: 5 / 60   wrong route detected: 35 / 54   median delay after the car left it: 7.8 s
+   TEST + VAL  false alarms on the correct route: 26 / 150   wrong route detected: 92 / 135   median delay after the car left it: 4.9 s
+
+Total 659 s. Rows in results/phase7_*.csv; metrics.md Day 15 section.

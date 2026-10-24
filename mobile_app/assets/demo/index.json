@@ -1,0 +1,58 @@
+{
+ "drives": [
+  {
+   "drive": "S-A8.csv",
+   "split": "test",
+   "duration_min": 111.0,
+   "starts": [
+    {
+     "start": 15920,
+     "t_min": 26.5
+    }
+   ]
+  },
+  {
+   "drive": "S-T7.csv",
+   "split": "test",
+   "duration_min": 169.5,
+   "starts": [
+    {
+     "start": 2942,
+     "t_min": 4.9
+    }
+   ]
+  },
+  {
+   "drive": "S-Vta29.csv",
+   "split": "test",
+   "duration_min": 39.5,
+   "starts": [
+    {
+     "start": 2211,
+     "t_min": 3.7
+    }
+   ]
+  },
+  {
+   "drive": "S-Vw4.csv",
+   "split": "test",
+   "duration_min": 210.9,
+   "starts": [
+    {
+     "start": 3271,
+     "t_min": 5.5
+    }
+   ]
+  }
+ ],
+ "files": [
+  "S-A8_15920_120_int8_correct.json",
+  "S-A8_15920_120_int8_wrong.json",
+  "S-T7_2942_120_int8_correct.json",
+  "S-T7_2942_120_int8_wrong.json",
+  "S-Vta29_2211_120_int8_correct.json",
+  "S-Vta29_2211_120_int8_wrong.json",
+  "S-Vw4_3271_120_int8_correct.json",
+  "S-Vw4_3271_120_int8_wrong.json"
+ ]
+}
