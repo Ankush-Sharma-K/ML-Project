@@ -7,3 +7,10 @@ results/plots/*.png
 !results/plots/.gitkeep
 *.zip
 *.csv
+# large / regenerable local data (Phases 5-7)
+cache/
+data/external_maps/
+results/replays/
+results/*osm_log*.txt
+results/README_original_brief_backup.md
+results/day10_log_before_frame_fix.txt

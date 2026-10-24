@@ -6,3 +6,6 @@ scikit-learn
 torch
 filterpy
 pymap3d
+osmnx
+osmium
+pytest

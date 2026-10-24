@@ -1,6 +1,6 @@
 # IDR Project — Handoff Context for New Chat
 
-> Paste this entire file at the start of a new chat. Days 1–10 are done (see the Day 8 audit parts 1–3, Day 9 and Day 10 at the end of PROGRESS.md); continue from Phase 5 (map matching).
+> Paste this entire file at the start of a new chat. All 7 phases (Days 1–15) are done — see Days 9–15 at the end of PROGRESS.md and README.md for the summary, quick start and commands.
 
 ---
 
@@ -14,7 +14,7 @@
 
 ---
 
-## Current Status: Day 10 complete ✅ (Days 1–10 verified on the real drives)
+## Current Status: Day 15 complete ✅ — all 7 phases done (verified on the real drives)
 
 | Phase | Status |
 |-------|--------|
@@ -22,12 +22,16 @@
 | Phase 2 — Calibration (gravity, ZUPT, bias, mount, denoise) | ✅ Complete |
 | Phase 3 — Dataset pipeline + CNN velocity model architecture | ✅ Complete |
 | Model training (run_training.py) | ✅ 20 s-window deep CNN on real drives — test MAE 4.53 m/s (per-drive 4.71) |
+| On-device model (Phase 3) | ✅ int8 Lite export 0.71 MB, test MAE 4.58 m/s, 0.6 ms/window — `compress_model.py` |
+| Unit tests | ✅ 27 passing — `python main.py test` |
 | Phase 4 — Strapdown INS + ZUPT | ✅ Complete — honest simulated-outage benchmark |
 | Day 9 — Anchored ML velocity in outages | ✅ Complete — `ins_with_ml_velocity.py` |
 | Day 10 — Gyro heading + 2-D path in outages | ✅ Complete — `heading.py` |
-| Phase 5 — Map Matching | ❌ Not started |
-| Phase 6 — GNSS+INS Fusion | ❌ Not started |
-| Phase 7 — App & Deployment | ❌ Not started |
+| Day 11 — OSM corridors + HMM map matching | ✅ Complete — `src/map_matching/` |
+| Day 12 — NHC study + turn-consistency matcher | ✅ Complete — NHC turn speed rejected, turn consistency adopted |
+| Phase 6 — GNSS+INS Fusion (Day 13) | ✅ Complete — EKF + adaptive GPS noise + gate + RTS track (`src/fusion/`) |
+| Phase 7 — Edge engine, route verification, app (Day 15) | ✅ Complete — `src/edge_engine/`, `mobile_app/`, `main.py` |
+| Simple-model baselines (brief: simple before neural) | ✅ ridge 6.51 / gradient boosting 5.18 / CNN 4.53 m/s test MAE |
 
 ---
 
@@ -139,7 +143,11 @@ speed = last real GPS fix; truth = car wheel speed where a vehicle file aligns
 - Day 8, 57 drives (median distance error at 30 / 60 / 120 s): hold last fix 56 / 151 / 314 m; INS + ZUPT 107 / 286 / 784 m.
 - Day 9, TEST drives: hold 74 / 166 / 361 m; ML 87 / 136 / 221 m; **anchored ML 74 / 113 / 206 m**.
 - Cross-validated against wheel truth (39 drives): anchored ML 47 / 88 / 176 m vs hold 61 / 141 / 315 m.
-- Day 10 path (end-position error at 30 / 60 / 120 s): heading only, true distance — straight line 98 / 239 / 651 m, gyro 59 / 157 / 439 m; full path on test drives — baseline 120 / 333 / 931 m, anchored ML + gyro 94 / 207 / 747 m.
+- Day 10 path (end-position error at 30 / 60 / 120 s): heading only, true distance — straight line 98 / 239 / 651 m, gyro 59 / 157 / 447 m; full path on test drives — baseline 120 / 332 / 929 m, anchored ML + gyro 94 / 208 / 747 m (re-run with the entrance-centred error).
+- Day 11 map matching (same outages, error now centred on the entrance fix): true distance, 38 drives — gyro 51 / 141 / 382 m -> **gyro + map route 8 / 26 / 238 m**; full pipeline, 3 test drives — baseline 122 / 353 / 953 m, Day 10 87 / 202 / 726 m, **+ map route 69 / 103 / 624 m**; test+val (9 drives) 78 / 156 / 459 m. P90 does not improve at 120 s (wrong-branch matches).
+- Day 12 (turn consistency, all 87 maps): true distance, 46 drives — gyro 59 / 157 / 447 m -> **map route 9 / 33 / 306 m**; full pipeline, 4 test drives (S-T7 added) — baseline 120 / 332 / 929 m, Day 10 94 / 208 / 747 m, **full method 72 / 106 / 712 m**; test+val (10) 78 / 157 / 477 m. Map fixes direction, not distance.
+- Day 13 EKF fusion (test drives, same outages): real time EKF + map **66 / 112 / 484 m** vs Day 12 72 / 110 / 813 m (same run); test+val 80 / 154 / 412 m. Tunnel track after GPS returns (hidden fixes inside the outage): **RTS 10 / 21 / 45 m** vs best baseline 15 / 41 / 134 m. GPS outliers (15% x 200 m): gate P90 97 m vs 198 m.
+- Day 15 streaming engine (int8 + map, deployed), test drives: **69 / 130 / 379 m**; test+val 80 / 156 / 376 m; RTS tunnel track 43 m at 120 s. Route verification (tuned on VAL): 8% false alarms, 65% of wrong turns detected, median 7.8 s delay.
 
 ---
 
@@ -151,10 +159,31 @@ speed = last real GPS fix; truth = car wheel speed where a vehicle file aligns
 **Load with:** `train_velocity_model.load_model(path, device)` (rebuilds the right architecture)
 **Details:** `results/training_summary.json`, `results/training_log.txt`, `results/plots/training_curves.png`
 `velocity_model_synthetic.pt` is only the synthetic-drive demo — do not use it.
+**On-device:** `results/checkpoints/velocity_model_int8.ptl` (0.71 MB, raw window (1, 200, 8) -> m/s, normalization inside; test MAE 4.58) and `velocity_model_fp32.ptl`; built by `python -m src.models.compress_model`.
 
 ---
 
 ## Next Steps for the Agent
+
+### Done in Day 15
+- `src/edge_engine/` (streaming `IDREngine`, `RouteMonitor`, replay benchmark, HTTP server, demo bundle), `mobile_app/` (Leaflet app), `main.py`, README
+- `src/models/simple_baselines.py` (brief: simple models first)
+- Start the app: `python main.py app` -> http://localhost:8000
+
+### Done in Day 13
+- `src/fusion/kalman_filter.py` (gated EKF update, RTS smoother), `src/fusion/gnss_ins_fusion.py` (vehicle EKF + Phase 6 benchmark)
+- ML-bias transfer studied on VAL: not stable (corr 0.19) -> bias state decays in 20 s
+- Gate death-spiral fixed (turn-rate heading noise + recovery rule); tuned on VAL only
+
+### Done in Day 12
+- NHC turn relation (v = a_lat / yaw rate) tested on 15 drives: 3–17 m/s error -> not used
+- Turn-consistency transition term (sigma 20°) adopted; turn-anchored distance tested, not adopted (tuned on TRAIN drives only)
+- S-T6/S-T7 maps built (80 maps); benchmark `python -m src.map_matching.hmm_map_matcher` now logs Day 12
+
+### Done in Day 11
+- `src/map_matching/osm_loader.py`: 2 km road corridor per drive (Geofabrik county pbf via pyosmium, Overpass fallback), cached in `data/external_maps/`
+- `src/map_matching/hmm_map_matcher.py`: causal HMM/Viterbi matcher with leak guard; benchmark `python -m src.map_matching.hmm_map_matcher`
+- Maps: all 87 10 Hz drives with GPS (French ones built in the completion pass)
 
 ### Done in Day 10
 - `src/dead_reckoning/heading.py`: per-phone calibrated gyro heading (axis order/signs/scale fitted on pre-outage GPS), 2-D path, benchmark `python -m src.dead_reckoning.heading`
@@ -164,17 +193,7 @@ speed = last real GPS fix; truth = car wheel speed where a vehicle file aligns
 - `src/dead_reckoning/ins_with_ml_velocity.py`: anchored ML, speed = ML(t) + (v0 - ML(0)) * exp(-t / 20 s)
 - Run `python -m src.dead_reckoning.ins_with_ml_velocity` (TEST drives) and `python -m src.dead_reckoning.strapdown_ins` (Day 8, all drives)
 
-### Phase 5 — Map Matching (Days 11–12)
-Create `src/map_matching/`:
-- `osm_loader.py` — download road graph from OpenStreetMap via osmnx
-- `nhc_constraint.py` — Non-Holonomic Constraint (vehicle can't move sideways)
-- `hmm_map_matcher.py` — Hidden Markov Model road snapping
-
-### Phase 6 — GNSS+INS Fusion (Days 13–14)
-Create `src/fusion/`:
-- `kalman_filter.py` — UKF or EKF base
-- `gnss_ins_fusion.py` — seamless GPS↔DR handoff
-
-### Phase 7 — App & Deployment (Day 15)
-- `src/edge_engine/` — lightweight inference API
-- `mobile_app/` — UI scaffold
+### Possible next steps (beyond the 15-day plan)
+- Native Android app around `velocity_model_int8.ptl` (PyTorch Mobile / ExecuTorch); port `IDREngine` logic
+- Better speed (the 120 s error is distance): per-phone adaptation with safeguards (see Known issues)
+- Browser test of the web app on a phone

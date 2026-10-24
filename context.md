@@ -35,14 +35,15 @@ for later evaluation against real wheel-speed ground truth.**
 |---|---|---|---|
 | 1 — Setup & Dataset Understanding | 1–2 | Repo scaffold, IO-VNBD loader, EDA, naive drift baseline | done |
 | 2 — Calibration & Preprocessing | 3–5 | Mount alignment, bias estimation, denoising, ZUPT classifier | done |
-| 3 — AI Velocity Estimation | 6–8 | IMU→velocity model, robustness, on-device compression | model trained on 75 real drives (Day 8 audit); on-device compression not done |
+| 3 — AI Velocity Estimation | 6–8 | IMU→velocity model, robustness, on-device compression | done: model trained on 75 real drives (Day 8 audit); int8 on-device export (completion pass) |
 | 4 — Core Dead Reckoning | 9–10 | Strapdown INS integration, drift benchmark evaluation | strapdown INS + outage benchmark done (Day 8 audit) |
-| 5 — Map Matching | 11–12 | OSM road graph, NHC constraints, HMM map matcher | — |
-| 6 — GNSS+INS Fusion | 13–14 | UKF/EKF fusion, adaptive noise, seamless GNSS↔DR handoff | — |
-| 7 — App & Deployment | 15 | Edge engine API, mobile app UI, packaging, final submission | — |
+| 5 — Map Matching | 11–12 | OSM road graph, NHC constraints, HMM map matcher | done (Days 11–12); NHC turn-speed tested, not adopted |
+| 6 — GNSS+INS Fusion | 13–14 | UKF/EKF fusion, adaptive noise, seamless GNSS↔DR handoff | done (Day 13): EKF + gate + RTS |
+| 7 — App & Deployment | 15 | Edge engine API, mobile app UI, packaging, final submission | done (Day 15) |
 
-**Constraint carried through every phase:** no internet / no torch in
-this sandbox. Training happens in the user's own environment.
+**Environment:** everything (training, benchmarks, map downloads) runs in the
+user's own venv (`mlproject`, torch with CUDA). The early "no internet / no torch
+sandbox" constraint no longer applies.
 
 **Where the user's real data lives:** `data/raw/real/` (flat folder of
 `S-*.csv` files, relative to the project root) — NOT an absolute path,
@@ -193,13 +194,82 @@ in only ~17% of outages, so the mapping is always fitted. The phone's fused
 orientation yaw is NOT used (calibratable in only ~20% of outages).
 Run: `python -m src.dead_reckoning.heading`.
 
+### Day 11 — map matching (`src/map_matching/`)
+
+Error frame change: `simulate_path_outages` now measures end-position error in
+metres around each outage's entrance fix (was the whole-drive frame).
+
+| File | Name | Signature | Notes |
+|---|---|---|---|
+| `heading.py` | `simulate_path_outages` | adds `map_match=None` | callable `(s, rr, speed, heading, ends) -> {end_row: {"snap": (dx, dy), "route": (dx, dy)} or None}`; adds methods `<speed>+gyro+map_snap` / `+map_route`, column `map_ok` |
+| `osm_loader.py` | `to_local_xy` | `(lat, lon, lat0, lon0) -> (x_east, y_north)` | metres around an origin (flat earth) |
+| `osm_loader.py` | `clean_gps_track` | `(df, max_jump_ms=80.0) -> (lat, lon)` | GPS fixes minus zeros and isolated jumps |
+| `osm_loader.py` | `drive_corridor` | `(df, buffer_m=2000.0) -> shapely polygon` | lat/lon |
+| `osm_loader.py` | `load_road_graph` | `(drive_name, df=None, cache_dir="data/external_maps", buffer_m=2000.0, network_type="drive", max_region_mb=150.0) -> nx.MultiDiGraph` | cached GraphML; Geofabrik if regions small, else Overpass; `G.graph["map_source"]`, `["corridor_buffer_m"]` |
+| `osm_loader.py` | `geofabrik_regions`, `region_ways`, `graph_from_ways` | see docstrings | pbf -> drivable ways (osmnx "drive" filter) -> graph truncated to corridor |
+| `osm_loader.py` | `edge_segments` | `(G) -> DataFrame` | one row per straight piece: u, v, key, piece, lat0/lon0/lat1/lon1, offset_m, edge_len_m, oneway |
+| `osm_loader.py` | `corridor_margin_m` | `(df, lat, lon) -> np.ndarray` | distance to nearest GPS fix |
+| `hmm_map_matcher.py` | `HMMMapMatcher` | `(G, df, sample_s=5.0, sigma0_m=15.0, sigma_growth=0.08, max_radius_m=600.0, sigma_heading_deg=30.0, beta_m=30.0, beta_frac=0.2, max_candidates=10, entry_radius_m=50.0, corridor_slack_m=200.0)` | one per drive |
+| `hmm_map_matcher.py` | `HMMMapMatcher.match_outage` | `(s, rr, speed, heading, ends) -> dict` | causal Viterbi; `None` per end when the leak guard fails |
+| `hmm_map_matcher.py` | `from_local_xy` | inverse of `to_local_xy` | |
+| `hmm_map_matcher.py` | `HMMMapMatcher` (Day 12) | adds `turn_sigma_deg=20.0` (None = off), `anchor_turn_deg=45.0`, `anchor_window_s=15.0` | `match_outage` results also carry `"turn"` (distance from last completed turn; not adopted); benchmark `__main__` logs as Day 12 |
+| `heading.py` | `simulate_path_outages` (Day 12) | map methods `+map_snap`, `+map_route`, `+map_turn` | |
+
+Maps: `data/external_maps/<drive>.graphml` (87 drives), region files in
+`data/external_maps/geofabrik/` (`*-latest.osm.pbf`, `*-drive-ways.pkl` cache).
+Missing: only S-Vw1/S-Vw15 (no GPS). All French drives built by the completion pass
+(`--max-region-mb 500` uses Geofabrik for the large French regions).
+Run: `python -m src.map_matching.osm_loader [--skip A,B | --only A,B]` and
+`python -m src.map_matching.hmm_map_matcher` (Day 11 benchmark).
+
+### Completion pass — on-device model and tests
+
+| File | Name | Signature | Notes |
+|---|---|---|---|
+| `models/compress_model.py` | `DeployableVelocityModel` | `(model, norm_stats)` | raw window (batch, 200, 8) -> speed (batch,), normalization inside |
+| `models/compress_model.py` | `quantize_int8` | `(model, calib_X, norm_stats, window_size, n_features, backend="qnnpack", batch_size=256) -> nn.Module` | FX static PTQ; `calib_X` = raw TRAIN windows |
+| `models/compress_model.py` | `export_lite` | `(deployable, path, window_size, n_features, optimize=True) -> Path` | trace -> (optimize_for_mobile) -> `.ptl`; use `optimize=False` for int8 |
+| `models/compress_model.py` | `load_lite`, `predict_raw`, `latency_ms` | see docstrings | |
+| `map_matching/osm_loader.py` `__main__` | flags | `--skip A,B`, `--only A,B`, `--max-region-mb N` | |
+
+Files: `results/checkpoints/velocity_model_int8.ptl` (0.71 MB, for the phone),
+`velocity_model_fp32.ptl`; `results/compression_summary.json`.
+Tests: `tests/` (conftest `synthetic_drive`), `python -m pytest tests -q`, 19 passing.
+
+### Day 13 — GNSS + INS fusion (`src/fusion/`)
+
+| File | Name | Signature | Notes |
+|---|---|---|---|
+| `dead_reckoning/heading.py` | `path_outage_starts` | `(df, outage_lengths_s, n_starts, v_true, seed, min_history_rows=1200) -> np.ndarray` | the Days 10-13 outage starts (refactored out, identical) |
+| `fusion/kalman_filter.py` | `ekf_update` | `(x, P, z, hx, H, R, gate=None, angle_rows=()) -> (x, P, accepted, nis)` | Joseph form; chi-square gate |
+| `fusion/kalman_filter.py` | `rts_smooth` | `(x_f, P_f, x_p, P_p, F, angle_cols=()) -> (x_s, P_s)` | F[k] = Jacobian k-1 -> k |
+| `fusion/kalman_filter.py` | `CHI2_999`, `wrap_angle` | | |
+| `fusion/gnss_ins_fusion.py` | `E, N, PSI, V, BV, BW` | state indices | metres around the outage entrance, heading clockwise from north |
+| `fusion/gnss_ins_fusion.py` | `FusionConfig` | dataclass | tuned on VAL: `gyro_scale_sigma=0.4`, `gps_course_sigma_deg=4.0` |
+| `fusion/gnss_ins_fusion.py` | `run_ekf` | `(t, omega, ml_rows, gps, x0, P0, cfg, gyro_ok) -> {x_f, P_f, x_p, P_p, F, gate}` | `gps` {row: (east, north, accuracy, speed, course_rad)}, `ml_rows` {row: speed} |
+| `fusion/gnss_ins_fusion.py` | `gyro_turn_rate` | `(integrator, fit, gyro_bias, rows, t) -> rad/s` | zeros if no gyro fit |
+| `fusion/gnss_ins_fusion.py` | `simulate_fusion_outages` | `(df, model, ckpt, device, outage_lengths_s=(30,60,120), n_starts=15, truth=None, seed=0, history_s=300.0, matcher=None, cfg=None, outlier_frac=0.15, outlier_m=200.0) -> (end, track, robust)` | Phase 6 benchmark per drive |
+
+Run: `python -m src.fusion.gnss_ins_fusion`.
+
+### Day 15 — edge engine, route verification, app (`src/edge_engine/`, `mobile_app/`)
+
+| File | Name | Signature | Notes |
+|---|---|---|---|
+| `models/simple_baselines.py` | `window_features` | `(X, fs_hz=10.0, chunk=4096) -> (n, 72)` | ridge / gradient boosting baselines in `__main__` |
+| `fusion/gnss_ins_fusion.py` | `VehicleEKF` | `(x0, P0, cfg, gyro_ok)`; `.predict(dt, omega) -> F`, `.update_ml(v)`, `.update_gps(e, n, acc, speed, course) -> (ok, nis)`, `.finish_step()` | `run_ekf` now loops over it (bit-identical) |
+| `edge_engine/engine.py` | `IDREngine` | `(model_path, ckpt_meta, map_matcher=None, cfg=None, recalib_every_s=60, buffer_s=600, min_calib_s=120, outage_after_s=12, map_every_s=5, reorigin_m=5000, route_monitor=None, start_index=0)`; `.push(sample) -> EngineOutput` | sample = phone columns (`RAW_COLS`) + `gps_fix` |
+| `edge_engine/engine.py` | `EngineOutput` | dataclass | t, lat, lon, heading_deg, speed_ms, sigma_m, status, route_status, route_dist_m, exit_realtime, track_corrected |
+| `edge_engine/engine.py` | `RouteMonitor` | `(route_lat, route_lon, base_m=40, k_sigma=2, hold_s=10)`; `.update(t, lat, lon, sigma_m) -> (state, dist)`, `.distance_m(lat, lon)` | tuned on VAL |
+| `edge_engine/engine.py` | `calibrated_features` | `(rows, calib, feature_cols) -> float32 (n, F)` | numpy twin of `apply_calibration` |
+| `edge_engine/replay.py` | `replay`, `wrong_route` | `(df, engine, r0, r1, mask=None, monitors=None)`, `(G, lat_true, lon_true, avoid_m=40, penalty=20)` | `__main__` = Day 15 benchmark (8 workers) |
+| `edge_engine/server.py` | `run_replay`, `list_drives`, `Handler` | `/api/health`, `/api/drives`, `/api/replay?drive&start&outage&model&route` | localhost unless `--host` |
+| `edge_engine/make_demo.py` | `__main__` | | writes `mobile_app/assets/demo/` |
+| `main.py` | CLI | `app`, `test`, `train`, `compress`, `baselines`, `maps`, `bench <day>`, `demo-bundle` | |
+
 ### Not yet built (reserve these module paths)
 | Phase | Expected file(s) |
 |---|---|
-| 3 | compression/export script (on-device model) |
-| 5 (Days 11–12) | `src/map_matching/osm_graph.py`, `src/map_matching/hmm_matcher.py` |
-| 6 (Days 13–14) | `src/fusion/ukf_fusion.py` |
-| 7 (Day 15) | `src/edge_engine/`, `mobile_app/` |
 
 ---
 
@@ -221,6 +291,10 @@ Unchanged from the prior version, **plus:**
   Anchored ML removes part of it at the tunnel entrance. Per-phone
   fine-tuning helped S-T7 a lot but broke S-Vw4 when the adaptation minutes
   did not cover the later speeds -- not adopted without safeguards.
+- **NHC turn speed (a_lat / yaw rate) is unusable on phone data** (Day 12: 3-17 m/s error) -- do not retry without a better lateral axis.
+- **Map matching fixes direction, not distance** (Day 12): the remaining 120 s error is the speed model's distance error.
+- **ML speed bias is not stable over minutes** (Day 13, VAL: corr 0.19 before vs during an outage) -- a long-term bias estimate does not transfer into the outage.
+- **EKF gate rejects some genuine fixes in sharp turns** (443 in the Day 13 run); the recovery rule prevents divergence.
 - **Gyro axis convention differs between phones** (matches GPS course on
   S-T2, not on S-S1/S-Vw4) — check before using gyro for direction (Phase 5).
 - **Early outages**: with little driving before the outage the heading

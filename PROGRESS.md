@@ -19,7 +19,7 @@ Trained/evaluated against the IO-VNBD dataset per the problem statement.
 | 6 — GNSS+INS Fusion | 13–14 | UKF/EKF fusion, adaptive noise, seamless GNSS↔DR handoff |
 | 7 — App & Deployment | 15 | Edge engine API, mobile app UI, packaging, final submission |
 
-**Status: Days 1–10 done on the real IO-VNBD data. Day 9 = anchored ML velocity, Day 10 = gyro heading + 2-D path during GPS outages. Next: Phase 5 (map matching).**
+**Status: all 7 phases complete (Days 1–15) on the real IO-VNBD data. Day 15 = streaming edge engine (int8 model), route verification, HTTP API + mobile web app, packaging (`main.py`, README).**
 
 ---
 
@@ -467,3 +467,384 @@ matching) is the next step.
 **Files:** new `src/dead_reckoning/heading.py`; outputs
 `results/day10_heading_benchmark.csv`, `results/day10_path_benchmark.csv`,
 `results/day10_log.txt`; Day 10 tables in `results/metrics.md`.
+
+---
+
+## Day 11 — Map matching (Phase 5, part 1)
+
+**Why:** Day 10 showed that even with perfect distance a 2-minute outage ends
+~440 m off, because small heading errors grow into large sideways errors. A car
+stays on roads, so the dead-reckoned path is matched to the OpenStreetMap road
+network.
+
+**Road maps (`src/map_matching/osm_loader.py`):** one road corridor per drive =
+the cleaned GPS track buffered by **2 km**, cached as
+`data/external_maps/<drive>.graphml`. Built from Geofabrik county extracts
+(`data/external_maps/geofabrik/`, read with pyosmium using osmnx's own "drive"
+filter -- checked: S-Vtb7 gives 576 nodes / 1222 edges vs 568 / 1210 from
+Overpass) or, for drives whose region file is large (France), from the Overpass
+API with retries. The public Overpass server rejected a bulk run of ~60 drives
+("at capacity"), which is why Geofabrik is the main source. Isolated junk GPS
+fixes are removed before buffering. 78 drives have a map. Not built: 7 French
+train drives skipped to save time (S-T11, S-T2, S-T3, S-T4, S-T5, S-T8, S-T9);
+S-T6 (val) and S-T7 (test) were still downloading when the benchmark ran;
+S-Vw1 / S-Vw15 have no usable GPS.
+
+**Leakage check:** the corridor is cut around the whole track, including the
+outage. A narrow corridor would tell the matcher where the car went, so it is
+wide (2 km) and, for every sample, the matcher checks that its whole search disc
+lies inside the corridor with a 200 m slack; otherwise the map is not used for
+that outage end and plain dead reckoning is reported. Map usable: 99% / 98% /
+91% of outages at 30 / 60 / 120 s.
+
+**Matcher (`src/map_matching/hmm_map_matcher.py`):** Hidden Markov Model
+(Newson & Krumm 2009, adapted to dead reckoning). States = positions on
+directed road edges (one-way streets respected); the dead-reckoned path is
+sampled every 5 s; emission = distance to the road (sigma = 15 m + 8% of the
+distance driven, because DR drifts) x agreement of road direction with the
+gyro heading (sigma 30 deg); transition = |driving distance on the graph - DR
+distance|; entrance = last GPS fix + course. Viterbi, **causal** (the position at
+time t uses only samples up to t). Two outputs: *snap* = matched road point;
+*route* = move the DR distance along the matched route from the entrance.
+Parameters were set a priori (not tuned); *route* was chosen as the full method
+on two train drives (S-A4, S-A5) before the benchmark.
+
+**Error frame fix in `heading.py`:** end-position error is now measured in
+metres around each outage's entrance fix (the old whole-drive flat-earth frame
+was off by up to ~1% on 100 km drives). Day 10 baselines below are recomputed
+on the same outages.
+
+**Benchmark** (same outages as Day 10; median distance to the first GPS fix
+after the outage; P90 in brackets):
+
+Part A — true distance (38 drives, 535 outages per length):
+
+| Outage | Straight line | Gyro heading (Day 10) | Gyro + map snap | **Gyro + map route** |
+|---|---|---|---|---|
+| 30 s | 95 m | 51 m | 15 m | **8 m** (218) |
+| 60 s | 235 m | 141 m | 59 m | **26 m** (574) |
+| 120 s | 641 m | 382 m | 278 m | **238 m** (1605) |
+
+Part B — full pipeline, TEST drives (3 drives with a map: S-A8, S-Vta29, S-Vw4; 45 outages):
+
+| Outage | Baseline (hold fix + course) | Anchored ML + gyro (Day 10) | **+ map route (full method)** |
+|---|---|---|---|
+| 30 s | 122 m | 87 m | **69 m** |
+| 60 s | 353 m | 202 m | **103 m** |
+| 120 s | 953 m | 726 m | **624 m** |
+
+Part B' — TEST + VAL drives (9 drives, 135 outages): baseline 170 / 363 / 882 m,
+Day 10 102 / 209 / 561 m, **full method 78 / 156 / 459 m**.
+
+**Reading:** with the right distance, map matching puts most 30-60 s outages
+within GPS noise (8 m / 26 m median, from 51 / 141 m). With the ML distance the
+gain is still large at 60 s (-49% vs Day 10 on test drives) but smaller at 120 s
+(-14%): the distance error from the speed model accumulates, and on long outages
+the matcher sometimes follows the wrong branch at a junction -- the P90 does not
+improve (wrong-road matches are far off). These are the Day 12 targets.
+
+**Files:** new `src/map_matching/osm_loader.py`, `src/map_matching/hmm_map_matcher.py`;
+`heading.py` (`map_match` hook, entrance-centred error); outputs
+`results/day11_map_heading_benchmark.csv`, `results/day11_map_path_benchmark.csv`,
+`results/day11_log.txt`, `results/day11_osm_log.txt`; Day 11 tables in
+`results/metrics.md`. New dependencies: `osmnx`, `osmium`.
+Run: `python -m src.map_matching.osm_loader` (maps), `python -m src.map_matching.hmm_map_matcher` (benchmark).
+
+---
+
+## Day 12 — NHC study, matcher improvements (Phase 5, part 2)
+
+**Maps completed:** S-T6 and S-T7 built from the Overpass mirror (~13 min
+each); later the 7 skipped French drives too (Geofabrik regions) -- all 87
+10 Hz drives with usable GPS have a map. S-T6 has no outage that qualifies for the
+benchmark, so the val set is unchanged; S-T7 joins the test set (4 drives).
+
+**1. Non-holonomic constraint (NHC) — tested, not adopted.** The dead
+reckoning already moves only along the heading (speed x heading), so the
+textbook NHC (no sideways / vertical velocity) is built in. The useful extra
+form is the turn relation: lateral acceleration = speed x yaw rate, which
+would give an independent speed v = a_lat / omega in every turn. Checked on 15
+val/test/train drives (|omega| > 0.08 rad/s, 2 s smoothing, vehicle-frame
+lateral axis from the calibration): median error 3-17 m/s, correlation with true
+speed near zero on most drives (best: S-T7 0.5, S-S1 0.46) -- worse than the ML
+model (~3-4 m/s). The phone's lateral acceleration is too small and noisy next
+to vibration and mount motion. Sign-free variants (|a_lat|/|omega|,
+|a_horizontal|/|omega|) were no better.
+
+**2. Matcher changes, tuned on TRAIN drives only** (29 drives, true speed and
+speed x0.85 / x1.15 to mimic the ML model's per-drive bias):
+
+| Change | Result on train drives | Adopted |
+|---|---|---|
+| Turn consistency in the transition (road direction change vs gyro heading change, sigma 20 deg) | 120 s: 194 -> 183 m (true speed); no change elsewhere | yes (default) |
+| "Turn-anchored" distance (count DR distance from the last completed >= 45 deg turn instead of the entrance) | applies in only 12-23% of outages; helps with biased speed (x0.85, 120 s: 243 -> 213 m when it applies), hurts with correct speed (60 s: 52 -> 75 m) | no (computed as `map_turn`, not reported) |
+
+With a 15% speed error every map variant ends ~430 m off at 120 s: **the map
+fixes direction, not distance.**
+
+**Benchmark** (same outages as Days 10-11; median distance to the first GPS fix
+after the outage):
+
+Part A — true distance (all 46 drives, 653 outages per length; map usable in
+99% / 98% / 88% of outages):
+
+| Outage | Straight line | Gyro heading (Day 10) | Gyro + map snap | **Gyro + map route** |
+|---|---|---|---|---|
+| 30 s | 98 m | 59 m | 16 m | **9 m** |
+| 60 s | 239 m | 157 m | 66 m | **33 m** |
+| 120 s | 651 m | 447 m | 356 m | **306 m** |
+
+Part B — full pipeline, TEST drives (4 drives: S-A8, S-T7, S-Vta29, S-Vw4; 60 outages):
+
+| Outage | Baseline (hold fix + course) | Anchored ML + gyro (Day 10) | + map snap | **+ map route (full method)** |
+|---|---|---|---|---|
+| 30 s | 120 m | 94 m | 73 m | **72 m** |
+| 60 s | 332 m | 208 m | 138 m | **106 m** |
+| 120 s | 929 m | 747 m | 696 m | **712 m** |
+
+Part B' — TEST + VAL (10 drives, 150 outages): baseline 160 / 354 / 874 m,
+Day 10 106 / 214 / 576 m, **full method 78 / 157 / 477 m**.
+
+**Reading:** the map halves the 60 s error (208 -> 106 m on test drives) and
+puts most outages with correct distance within GPS noise. At 120 s the gain is
+small on the 4 test drives (747 -> 712 m): adding S-T7, whose speed the model
+gets badly wrong (known per-drive bias, Day 9), erases most of it; on the larger
+test+val set the full method is still -17% at 120 s. The remaining error is the
+DISTANCE from the speed model. Phase 5 is complete; better speed (or fusion
+with any absolute fix, Phase 6) is what can still move the 120 s number.
+
+**Files:** `hmm_map_matcher.py` (turn consistency on by default, `map_turn`
+output, Day 12 benchmark), `heading.py` (`map_turn` rows); outputs
+`results/day12_map_heading_benchmark.csv`, `results/day12_map_path_benchmark.csv`,
+`results/day12_log.txt`, `results/day11_osm_log_france.txt`; Day 12 tables in
+`results/metrics.md`.
+
+---
+
+## Days 1–12 completion pass — nothing left open
+
+Everything still open in Phases 1–5 was finished before Phase 6:
+
+**1. On-device model (Phase 3) — `src/models/compress_model.py`.** The model is
+exported for the PyTorch Lite interpreter (PyTorch Mobile / ExecuTorch). The
+exported files take the RAW 20 s window (batch, 200, 8 features in
+`ckpt["feature_cols"]` order) and return speed in m/s; the training
+normalization is inside the file, so the app cannot apply the wrong statistics.
+
+| Model | File | Val MAE | Test MAE | Latency (1 window, 1 CPU thread) |
+|---|---|---|---|---|
+| Original checkpoint | 2.63 MB | 2.495 m/s | 4.534 m/s | 9.8 ms |
+| `velocity_model_fp32.ptl` (BatchNorm folded) | 2.64 MB | 2.495 | 4.534 | 6.4 ms |
+| **`velocity_model_int8.ptl`** (static int8, calibrated on 2000 TRAIN windows) | **0.71 MB** | 2.473 | 4.580 | **0.6 ms** |
+
+int8 vs original on the 32,165 test windows: median difference 0.18 m/s, 99%
+within 1.3 m/s, max 2.9 m/s (max 8.6 m/s on one val window). `optimize_for_mobile`
+stores every int8 weight twice (1.32 MB), so the int8 file is exported without
+it. The int8 file is the one for the phone. Run:
+`python -m src.models.compress_model` (writes `results/compression_summary.json`,
+`results/compression_log.txt`).
+
+**2. All road maps.** The 7 French train drives skipped on Day 11 were built
+from Geofabrik region files (`--max-region-mb 500`): all 87 10 Hz drives with
+usable GPS now have a map (S-Vw1 / S-Vw15 have no GPS). The Day 12 benchmark was
+re-run: Part A now covers all 46 drives (table above); Part B is unchanged (the
+French drives are train drives).
+
+**3. Day 10 re-run with the entrance-centred error.** `results/metrics.md` Day 10
+rows are now measured the same way as Days 11–12. Changes are small: gyro heading
+with true distance 59 / 157 / **447** m (was 439 at 120 s); full method on test
+drives 94 / **208** / 747 m (was 207 at 60 s). Old log kept as
+`results/day10_log_before_frame_fix.txt`.
+
+**4. Unit tests — `tests/` (19 tests, all passing).** Synthetic data only (no
+dataset or internet needed): speed-unit detection, GPS speed interpolation,
+sliding windows and the gap guard, anchored ML speed, 2-D path, gyro axis /
+sign / scale fit, lat/lon round trip, the OSM "drive" filter, edge segments,
+the HMM matcher on a T-junction (follows the turn despite gyro drift; refuses
+an off-road entrance), normalization, the export wrapper, Lite round trip, int8
+closeness. Run: `python -m pytest tests -q` (~2 min, mostly imports).
+
+**5. Data limit, documented, not "fixed".** Only 4 of the 9 test drives have
+outages that qualify for the full-path benchmark: S-Vta10 (3 min), S-Vta13
+(1 min), S-Vta21 (3 min), S-Vtb7 (1 min), S-Vw5 (2 min) are too short for
+2 minutes of driving before an outage plus a 2-minute outage. Changing the frozen split
+to get more test outages would bias the result, so the larger test + val table
+(10 drives) is reported next to it instead.
+
+New dependency: `pytest` (requirements.txt).
+
+---
+
+## Day 13 — GNSS + INS fusion (Phase 6)
+
+**Feasibility first (VAL drives only).** Idea: learn the speed model's per-drive
+bias while GPS is available and carry it into the outage (the 120 s error is
+distance, Day 12). Result: the model's error over the 5 minutes before an outage
+barely predicts its error during it (correlation 0.19); correcting with it did
+not help at 120 s (142 -> 143 m distance error) and badly hurt S-Vw16a
+(75 -> 425 m). So the filter does NOT carry a long-term bias: the ML-bias state
+decays with 20 s, the same as Day 9's anchored ML.
+
+**Filter (`src/fusion/kalman_filter.py`, `src/fusion/gnss_ins_fusion.py`).** One
+EKF at 10 Hz before, during and after the outage. State: east, north, heading,
+speed, ML-speed bias (Gauss-Markov, 20 s), gyro bias. Inputs: calibrated gyro
+turn rate (Day 10 per-phone mapping). Updates: ML speed once per second; at each
+GPS fix position (noise from the phone's `gps_accuracy_m` -- adaptive), speed,
+course (when moving). Position and course are chi-square gated (99.9%).
+Calibration, gyro mapping and the ML model use data before the outage only;
+outage starts are identical to Days 10-12 (`heading.path_outage_starts`,
+refactored out of `simulate_path_outages`, checked identical).
+
+**Bug found and fixed while building it:** with GPS only every ~9 s, the gyro
+heading in a sharp turn is 20-30 deg off by the next fix; the gate then rejected
+the genuine fix, the filter drifted further and never recovered (219 rejections
+on S-Vw3). Fixes: heading process noise grows with the turn rate (the fitted
+gyro scale is uncertain), and a fix rejected right after another rejection is
+accepted with its noise inflated by NIS / threshold.
+
+**Tuning (VAL drives only, 6 settings):** gyro-scale noise 0.2 -> 0.4 and GPS
+course noise 8 -> 4 deg (120 s end error on val: 449 -> 395 m); everything else
+a priori. TEST drives were used only for the final run.
+
+**Benchmark** (same outages as Days 10-12; median metres; the Day 10 / Day 12
+references are recomputed in the same run with the Phase 6 ML sampling grid,
+which is why they differ slightly from the Day 12 table -- 120 s map-matched
+errors are sensitive, P90 ~1.8 km):
+
+1. Real-time end position, TEST drives (4 drives, 60 outages):
+
+| Outage | Day 10 (anchored ML + gyro) | EKF | Day 12 (+ map) | **EKF + map** |
+|---|---|---|---|---|
+| 30 s | 97 | 113 | 72 | **66** |
+| 60 s | 224 | 200 | 110 | **112** |
+| 120 s | 751 | 565 | 813 | **484** |
+
+TEST + VAL (10 drives, 150 outages; val drives were used for tuning): Day 12
+79 / 168 / 505 m -> **EKF + map 80 / 154 / 412 m**.
+
+2. Tunnel track after GPS returns (error at the hidden GPS fixes INSIDE the
+outage, TEST drives; 578 / 1163 / 2367 fixes):
+
+| Outage | EKF real time | Straight line entry -> exit | Day 10 DR + end error spread | **EKF + RTS smoother** |
+|---|---|---|---|---|
+| 30 s | 22 | 23 | 15 | **10** |
+| 60 s | 45 | 52 | 41 | **21** |
+| 120 s | 118 | 134 | 140 | **45** |
+
+3. Robustness (TEST + VAL): 15% of the GPS fixes before the outage replaced by
+200 m jumps with unchanged reported accuracy; error predicting the entrance
+fix: last fix + extrapolation 20 m (P90 198 m), EKF without gate 26 m
+(P90 207 m), **EKF with gate 20 m (P90 97 m)**. The gate rejected 1143 of 1147
+injected outliers -- and 443 genuine fixes (sharp turns); the recovery rule
+keeps those from causing divergence.
+
+**Reading:** fusion helps most where Phase 5 stopped: at 120 s the EKF + map is
+-40% vs Day 12 on the test drives (and -18% on test + val), mainly because the
+filter's heading (GPS course + gyro, with uncertainty) enters the outage better
+than the raw last course, so the matcher picks the right roads more often. At
+30-60 s it is level with Day 12. After GPS returns, the RTS smoother rebuilds the
+tunnel track 2-3x more accurately than any baseline (45 m vs 134+ m at 120 s) --
+the "seamless" part: the logged track is corrected, not just the current
+position. The gate halves the tail error under GPS outliers; its cost is
+rejecting some genuine fixes in sharp turns.
+
+**Files:** new `src/fusion/kalman_filter.py`, `src/fusion/gnss_ins_fusion.py`,
+`tests/test_fusion.py` (5 tests; 24 in total); `heading.py`
+(`path_outage_starts`). Outputs `results/phase6_end_benchmark.csv`,
+`results/phase6_track_benchmark.csv`, `results/phase6_robust_benchmark.csv`,
+`results/day13_log.txt`; Day 13 tables in `results/metrics.md`.
+Run: `python -m src.fusion.gnss_ins_fusion`.
+
+---
+
+## Day 15 — Edge engine, route verification, app, packaging (Phase 7)
+
+**Phase 3 gap found while re-reading the brief** ("start with simple models
+before trying neural networks"): no classical model had been tried.
+`src/models/simple_baselines.py` trains them on the SAME windows and split
+(72 hand-made features per window: statistics and 0-1 / 1-3 / 3-5 Hz band
+energy per channel):
+
+| Model | Val MAE | Test MAE |
+|---|---|---|
+| Predict the training mean | 9.22 | 8.05 |
+| Ridge regression | 6.21 | 6.51 |
+| Gradient boosting | 3.32 | 5.18 |
+| **Deep CNN** | **2.50** | **4.53** |
+
+The CNN is 12% better than the best classical model on test.
+
+**Second gap: Stage 6 of the brief (route verification) had not been built.**
+It is part of the engine below.
+
+**Streaming engine (`src/edge_engine/engine.py`).** `IDREngine.push(sample)`
+takes one 10 Hz phone sample and returns position, heading, speed, sigma and
+status (INIT / GNSS / DR / DR+MAP): gravity removal, rolling calibration and
+gyro mapping (last 10 min, refreshed every 60 s while GPS is available), the
+**int8 on-device model** once per second, the Phase 6 EKF (`VehicleEKF`,
+refactored out of `run_ekf`; outputs checked bit-identical), HMM map matching
+during the outage (every 5 s), RTS-corrected tunnel track when GPS returns,
+origin re-anchoring every 5 km, and the route monitor. Speed: profiling cut a
+12-minute replay from 49 s to 12.6 s (~58x real time): window features in
+numpy instead of pandas (checked identical to the training pipeline),
+matching every 5 s, single-thread inference.
+
+**Route verification (`RouteMonitor`).** ON / OFF route against a planned
+route polyline. Evaluated with two planned routes per outage: the route
+actually driven (any alarm = false alarm) and a "wrong turn" route (shortest
+road path that avoids the driven roads; only outages where the car really
+ends > 100 m from it; an alarm counts only if it is not raised before the car
+actually left the route, 5 s tolerance). The first rule (40 m, tighter when
+map-matched, 3 s hold) gave false alarms in 60% of test outages; the rule was
+then tuned on VAL drives only (120 settings): distance > max(40 m, 2 sigma)
+for 10 s. A benchmark bug was found and fixed on the way (the wrong route
+lacked the pre-tunnel part, so the monitor was already OFF before the tunnel).
+
+**Benchmark (`src/edge_engine/replay.py`, same outages as Days 10-13, fresh
+engine per outage starting 10 min before the tunnel):**
+
+Real-time end error, TEST drives (median m, 60 outages):
+
+| Method | 30 s | 60 s | 120 s |
+|---|---|---|---|
+| Phase 6 batch EKF + map | 66 | 112 | 484 |
+| Engine, fp32 model + map | 73 | 130 | 374 |
+| **Engine, int8 model + map (deployed)** | **69** | **130** | **379** |
+
+TEST + VAL (10 drives): batch 80 / 154 / 412 m, deployed engine 80 / 156 / 376 m.
+The engine is not identical to the batch run by design (rolling 10-minute
+calibration vs all data before the outage, 10 vs 5 minutes filter warm-up,
+ML prediction grid); int8 vs fp32 costs nothing measurable.
+
+Tunnel track after the 120 s outage (hidden GPS fixes): real time 78 m ->
+**RTS corrected 43 m** (TEST), 92 -> 52 m (TEST + VAL).
+
+Route verification inside the tunnel, TEST: **5 / 60 false alarms (8%)**,
+**35 / 54 wrong turns detected (65%)**, 7 premature alarms, median 7.8 s after
+the car left the route (TEST + VAL: 26 / 150, 92 / 135). The offline tuning
+estimate on test was 5% / 76%; the full replay (10 Hz updates, state carried
+in from before the tunnel) is the number reported.
+
+**API + app.** `src/edge_engine/server.py` (standard library; localhost unless
+`--host`): `/api/health`, `/api/drives`, `/api/replay` (cached in
+`results/replays/`), serves `mobile_app/` -- a mobile-first Leaflet app that
+plays a simulated tunnel: true path, live estimate coloured by status,
+uncertainty circle, speed / heading / sigma, route status, corrected track
+and the error at the exit. Offline demo bundle (`make_demo.py`): first outage
+of every TEST drive, correct and wrong route -- not cherry-picked (S-Vta29's
+wrong turn is not detected and ends 610 m off). Checked over HTTP (all files
+and endpoints, error handling) and `node --check`; not yet tried in a browser.
+
+**Packaging.** `main.py` (app / test / train / compress / baselines / maps /
+bench / demo-bundle), README rewritten (results, quick start, commands,
+layout; the team's original brief kept at the end, backup in
+`results/README_original_brief_backup.md`), 27 unit tests passing
+(+3 engine / route-monitor tests).
+
+**Files:** new `src/models/simple_baselines.py`, `src/edge_engine/engine.py`,
+`replay.py`, `server.py`, `make_demo.py`, `mobile_app/index.html`, `app.js`,
+`style.css`, `mobile_app/assets/demo/`, `tests/test_edge_engine.py`, `main.py`;
+`gnss_ins_fusion.py` (`VehicleEKF`). Outputs: `results/simple_baselines.json`,
+`results/phase7_engine_end.csv`, `phase7_engine_track.csv`,
+`phase7_route_verification.csv`, `results/day15_log.txt`; Day 15 rows in
+`results/metrics.md`.
